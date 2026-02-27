@@ -6,29 +6,30 @@ export interface BusinessProfile {
   email: string;
   address: string;
   gstNumber?: string;
-  logo?: string;
-  qrCodes: string[];
+  lastReceiptNumber?: number;
 }
 
 export interface Transaction {
   id: string;
-  date: string;
+  createdAt: any;
+  receiptNumber?: string;
   customerName: string;
-  customerMobile: string;
-  customerEmail?: string;
-  customerIdNo?: string;
+  customerMobile?: string;
+  vehicleNumber?: string;
+  remarks?: string;
   services: {
     name: string;
     price: number;
   }[];
-  gstPercent?: number;
+  subtotal: number;
+  tax?: number;
   totalAmount: number;
   amountPaid: number;
-  balanceAmount: number;
-  pendingAmount: number;
+  dueAmount: number;
+  paymentStatus: 'Paid' | 'Unpaid';
 }
 
-export type ThemeId = 'dark-purple' | 'black-green' | 'dark-blue' | 'purple-brand' | 'red-black' | 'light-minimal';
+export type ThemeId = 'light' | 'dark';
 
 export interface Theme {
   id: ThemeId;
@@ -54,17 +55,14 @@ export interface Translations {
   address: string;
   gstNumber: string;
   optional: string;
-  logoUpload: string;
-  qrCodesTitle: string;
-  qrMandatory: string;
   submit: string;
   language: string;
   // Billing Page
   customerDetails: string;
   customerName: string;
   customerMobile: string;
-  customerEmail: string;
-  idNo: string;
+  vehicleNumber: string;
+  remarks: string;
   serviceNeeds: string;
   searchServices: string;
   selectedServices: string;

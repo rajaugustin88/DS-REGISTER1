@@ -7,7 +7,8 @@ import { Language, BusinessProfile, Transaction } from './types';
 import { LogIn, Upload, Plus, Trash2, CheckCircle2, User, History, LogOut, Search, X, ChevronLeft, ChevronRight, Settings, Phone, Globe, Calendar, Clock, ChevronDown, Palette } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, googleProvider } from './lib/firebase';
-import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { getUserProfile, saveUserProfile, getUserHistory, saveTransaction, updateTransactionStatus, clearUserHistory } from './lib/dataService';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { THEMES } from './constants';
@@ -15,139 +16,293 @@ import { ThemeId } from './types';
 
 // --- Helpers ---
 
-const generateReceiptPDF = (tx: Transaction, profile: BusinessProfile | null) => {
+const getBase64ImageFromUrl = async (url: string): Promise<string> => {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+};
+
+const generateReceiptPDF = async (tx: Transaction, profile: BusinessProfile | null, theme: ThemeId) => {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
+  const { photoURL } = getUserInfo();
+  const isDark = theme === 'dark';
+
+  // Pick a random slogan
+  const randomSlogan = SLOGANS[Math.floor(Math.random() * SLOGANS.length)];
+
+  // Header Background
+  const headerBg = isDark ? [37, 211, 102] : [232, 240, 254]; // WhatsApp Green vs Google Pay Soft Blue
+  const headerText = isDark ? [255, 255, 255] : [33, 37, 41];
   
-  // Header
-  doc.setFontSize(20);
-  doc.setTextColor(26, 188, 156); // Primary color
-  doc.text(profile?.businessName || 'DS-REGISTER', pageWidth / 2, 20, { align: 'center' });
+  // Calculate dynamic header height
+  doc.setFontSize(9);
+  const addressLines = doc.splitTextToSize(profile?.address || '', pageWidth - 40);
+  const headerHeight = 65 + (addressLines.length > 1 ? (addressLines.length - 1) * 5 : 0);
+
+  doc.setFillColor(headerBg[0], headerBg[1], headerBg[2]);
+  doc.rect(0, 0, pageWidth, headerHeight, 'F');
+
+  // Logo
+  if (photoURL) {
+    try {
+      const base64 = await getBase64ImageFromUrl(photoURL);
+      doc.addImage(base64, 'JPEG', pageWidth / 2 - 10, 8, 20, 20, undefined, 'FAST');
+    } catch (e) {
+      console.error("Failed to load logo for PDF", e);
+    }
+  }
   
+  let currentY = photoURL ? 36 : 20;
+
+  // Header Text
+  doc.setTextColor(headerText[0], headerText[1], headerText[2]);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.text(profile?.businessName || 'DS-REGISTER', pageWidth / 2, currentY, { align: 'center' });
+  
+  // Slogan
+  currentY += 8;
   doc.setFontSize(10);
-  doc.setTextColor(100);
-  doc.text(profile?.address || '', pageWidth / 2, 28, { align: 'center' });
-  doc.text(`Mobile: ${profile?.mobileNumber || ''} | Email: ${profile?.email || ''}`, pageWidth / 2, 34, { align: 'center' });
+  doc.setFont('helvetica', 'bold');
+  doc.text(randomSlogan, pageWidth / 2, currentY, { align: 'center' });
+
+  // Address (Wrapped)
+  currentY += 8;
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  addressLines.forEach((line: string) => {
+    doc.text(line, pageWidth / 2, currentY, { align: 'center' });
+    currentY += 5;
+  });
+
+  // Contact Info
+  doc.text(`Mobile: ${profile?.mobileNumber || ''} | Email: ${profile?.email || ''}`, pageWidth / 2, currentY, { align: 'center' });
+  currentY += 5;
   if (profile?.gstNumber) {
-    doc.text(`GST: ${profile.gstNumber}`, pageWidth / 2, 40, { align: 'center' });
+    doc.text(`GST: ${profile.gstNumber}`, pageWidth / 2, currentY, { align: 'center' });
+    currentY += 5;
   }
 
-  doc.setDrawColor(200);
-  doc.line(15, 45, pageWidth - 15, 45);
-
   // Receipt Info
-  doc.setFontSize(12);
+  const startY = headerHeight + 15;
   doc.setTextColor(0);
-  doc.text('RECEIPT', 15, 55);
+  doc.setFontSize(14);
+  doc.setFont('helvetica', 'bold');
+  doc.text('RECEIPT', 15, startY);
+  
   doc.setFontSize(10);
-  doc.text(`Receipt ID: ${tx.id}`, 15, 62);
-  doc.text(`Date: ${new Date(tx.date).toLocaleString()}`, 15, 68);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100);
+  doc.text(`Receipt No: ${tx.receiptNumber || tx.id.substring(0, 8)}`, 15, startY + 8);
+  const dateStr = tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleString() : new Date(tx.createdAt || Date.now()).toLocaleString();
+  doc.text(`Date: ${dateStr}`, 15, startY + 14);
 
   // Customer Info
+  doc.setTextColor(0);
   doc.setFontSize(11);
-  doc.text('CUSTOMER DETAILS', 15, 80);
+  doc.setFont('helvetica', 'bold');
+  doc.text('CUSTOMER DETAILS', 15, startY + 28);
+  
   doc.setFontSize(10);
-  doc.text(`Name: ${tx.customerName}`, 15, 87);
-  doc.text(`Mobile: ${tx.customerMobile}`, 15, 93);
-  if (tx.customerIdNo) {
-    doc.text(`ID/Vehicle No: ${tx.customerIdNo}`, 15, 99);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Name:`, 15, startY + 36);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`${tx.customerName}`, 45, startY + 36);
+  
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Mobile:`, 15, startY + 42);
+  doc.text(`${tx.customerMobile || '-'}`, 45, startY + 42);
+  
+  if (tx.vehicleNumber) {
+    doc.text(`Vehicle No:`, 15, startY + 48);
+    doc.text(`${tx.vehicleNumber}`, 45, startY + 48);
+  }
+  if (tx.remarks) {
+    doc.text(`Remarks:`, 15, startY + 54);
+    doc.text(`${tx.remarks}`, 45, startY + 54);
   }
 
   // Services Table
   autoTable(doc, {
-    startY: 110,
+    startY: startY + 62,
     head: [['Service Name', 'Price (INR)']],
     body: tx.services.map(s => [s.name, s.price.toFixed(2)]),
     theme: 'striped',
-    headStyles: { fillColor: [26, 188, 156] },
+    headStyles: { fillColor: isDark ? [37, 211, 102] : [26, 188, 156], textColor: [255, 255, 255] },
+    styles: { fontSize: 10, cellPadding: 4 },
     margin: { left: 15, right: 15 }
   });
 
-  const finalY = (doc as any).lastAutoTable.finalY + 10;
+  const finalY = (doc as any).lastAutoTable.finalY + 15;
 
-  // Totals
-  doc.setFontSize(10);
-  doc.text(`Subtotal:`, pageWidth - 70, finalY);
-  doc.text(`INR ${tx.services.reduce((a, b) => a + b.price, 0).toFixed(2)}`, pageWidth - 15, finalY, { align: 'right' });
-
-  if (tx.gstPercent) {
-    doc.text(`GST (${tx.gstPercent}%):`, pageWidth - 70, finalY + 6);
-    doc.text(`INR ${(tx.totalAmount - tx.services.reduce((a, b) => a + b.price, 0)).toFixed(2)}`, pageWidth - 15, finalY + 6, { align: 'right' });
-  }
-
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`TOTAL AMOUNT:`, pageWidth - 70, finalY + 15);
-  doc.text(`INR ${tx.totalAmount.toFixed(2)}`, pageWidth - 15, finalY + 15, { align: 'right' });
+  // Totals Section
+  const rightAlignX = pageWidth - 15;
+  const labelX = pageWidth - 75;
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Amount Paid:`, pageWidth - 70, finalY + 22);
-  doc.text(`INR ${tx.amountPaid.toFixed(2)}`, pageWidth - 15, finalY + 22, { align: 'right' });
+  doc.setTextColor(100);
+  
+  doc.text(`Subtotal:`, labelX, finalY);
+  const subtotalVal = tx.subtotal ?? tx.services.reduce((a, b) => a + b.price, 0);
+  doc.text(`INR ${subtotalVal.toFixed(2)}`, rightAlignX, finalY, { align: 'right' });
 
-  if (tx.pendingAmount > 0) {
+  const taxVal = tx.tax ?? (tx.totalAmount - subtotalVal);
+  currentY = finalY;
+  if (taxVal > 0) {
+    currentY += 8;
+    doc.text(`Tax:`, labelX, currentY);
+    doc.text(`INR ${taxVal.toFixed(2)}`, rightAlignX, currentY, { align: 'right' });
+  }
+
+  currentY += 12;
+  doc.setFontSize(12);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0);
+  doc.text(`TOTAL AMOUNT:`, labelX, currentY);
+  doc.text(`INR ${tx.totalAmount.toFixed(2)}`, rightAlignX, currentY, { align: 'right' });
+
+  currentY += 10;
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 128, 0); // Green for paid
+  doc.text(`Amount Paid:`, labelX, currentY);
+  doc.text(`INR ${(tx.amountPaid || 0).toFixed(2)}`, rightAlignX, currentY, { align: 'right' });
+
+  if (tx.dueAmount > 0) {
+    currentY += 8;
+    doc.setTextColor(255, 0, 0); // Red for due
+    doc.text(`Due Amount:`, labelX, currentY);
+    doc.text(`INR ${tx.dueAmount.toFixed(2)}`, rightAlignX, currentY, { align: 'right' });
+  }
+
+  currentY += 15;
+  if (tx.paymentStatus === 'Unpaid' || tx.dueAmount > 0) {
     doc.setTextColor(255, 0, 0);
   } else {
     doc.setTextColor(0, 128, 0);
   }
-  doc.text(`Pending Amount:`, pageWidth - 70, finalY + 28);
-  doc.text(`INR ${tx.pendingAmount.toFixed(2)}`, pageWidth - 15, finalY + 28, { align: 'right' });
-
-  doc.setTextColor(0);
-  doc.text(`Payment Status: ${tx.pendingAmount > 0 ? 'PENDING' : 'FULLY PAID'}`, 15, finalY + 40);
+  doc.setFontSize(11);
+  doc.text(`Payment Status: ${tx.paymentStatus.toUpperCase()}`, 15, currentY);
 
   // Footer
   doc.setFontSize(8);
   doc.setTextColor(150);
+  doc.setFont('helvetica', 'normal');
   doc.text('Thank you for your business!', pageWidth / 2, doc.internal.pageSize.getHeight() - 15, { align: 'center' });
 
-  doc.save(`Receipt_${tx.customerName.replace(/\s+/g, '_')}_${new Date(tx.date).toLocaleDateString().replace(/\//g, '-')}.pdf`);
+  doc.save(`Receipt_${tx.customerName.replace(/\s+/g, '_')}_${new Date().getTime()}.pdf`);
 };
 
-const generateTransactionsPDF = (history: Transaction[], profile: BusinessProfile | null, title: string, filename: string) => {
+const generateTransactionsPDF = async (history: Transaction[], profile: BusinessProfile | null, title: string, filename: string, theme: ThemeId) => {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
+  const { photoURL } = getUserInfo();
+  const isDark = theme === 'dark';
+
+  // Header Background
+  const headerBg = isDark ? [37, 211, 102] : [232, 240, 254];
+  const headerText = isDark ? [255, 255, 255] : [33, 37, 41];
   
-  doc.setFontSize(18);
-  doc.setTextColor(26, 188, 156);
-  doc.text(profile?.businessName || 'DS-REGISTER', pageWidth / 2, 15, { align: 'center' });
+  doc.setFillColor(headerBg[0], headerBg[1], headerBg[2]);
+  doc.rect(0, 0, pageWidth, 55, 'F');
+
+  // Logo
+  if (photoURL) {
+    try {
+      const base64 = await getBase64ImageFromUrl(photoURL);
+      doc.addImage(base64, 'JPEG', pageWidth / 2 - 8, 6, 16, 16, undefined, 'FAST');
+    } catch (e) {
+      console.error("Failed to load logo for PDF", e);
+    }
+  }
+  
+  doc.setTextColor(headerText[0], headerText[1], headerText[2]);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.text(profile?.businessName || 'DS-REGISTER', pageWidth / 2, photoURL ? 28 : 15, { align: 'center' });
+  
+  // Slogan
+  const randomSlogan = SLOGANS[Math.floor(Math.random() * SLOGANS.length)];
+  doc.setFontSize(9);
+  doc.text(randomSlogan, pageWidth / 2, photoURL ? 33 : 20, { align: 'center' });
+
   doc.setFontSize(14);
-  doc.setTextColor(0);
-  doc.text(title, pageWidth / 2, 25, { align: 'center' });
-  doc.setFontSize(10);
-  doc.text(`Generated on: ${new Date().toLocaleString()}`, pageWidth / 2, 32, { align: 'center' });
+  doc.text(title, pageWidth / 2, photoURL ? 42 : 29, { align: 'center' });
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Generated on: ${new Date().toLocaleString()}`, pageWidth / 2, photoURL ? 48 : 35, { align: 'center' });
 
   const tableData = history.map((tx, index) => [
     index + 1,
-    `${tx.customerName}\n${tx.customerMobile}`,
+    `${tx.customerName}\n${tx.customerMobile || ''}`,
+    tx.vehicleNumber || '-',
     tx.services.map(s => s.name).join(', '),
     `₹${tx.totalAmount.toFixed(2)}`,
-    `₹${tx.amountPaid.toFixed(2)}`,
-    `₹${tx.pendingAmount.toFixed(2)}`,
-    tx.pendingAmount > 0 ? 'PENDING' : 'PAID',
-    new Date(tx.date).toLocaleDateString('en-IN')
+    `₹${(tx.amountPaid || 0).toFixed(2)}`,
+    `₹${(tx.dueAmount || 0).toFixed(2)}`,
+    tx.paymentStatus.toUpperCase(),
+    tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleDateString('en-IN') : new Date(tx.createdAt || Date.now()).toLocaleDateString('en-IN')
   ]);
 
   autoTable(doc, {
-    startY: 40,
-    head: [['#', 'Customer', 'Services', 'Total', 'Paid', 'Pending', 'Status', 'Date']],
+    startY: 65,
+    head: [['#', 'Customer', 'Vehicle', 'Services', 'Total', 'Paid', 'Due', 'Status', 'Date']],
     body: tableData,
     theme: 'grid',
-    headStyles: { fillColor: [26, 188, 156], fontSize: 8 },
-    styles: { fontSize: 7, cellPadding: 2 },
+    headStyles: { fillColor: isDark ? [37, 211, 102] : [26, 188, 156], fontSize: 8, textColor: [255, 255, 255] },
+    styles: { fontSize: 7, cellPadding: 3, overflow: 'linebreak' },
     columnStyles: {
       0: { cellWidth: 8 },
-      1: { cellWidth: 30 },
-      2: { cellWidth: 50 },
-      3: { cellWidth: 20 },
-      4: { cellWidth: 20 },
-      5: { cellWidth: 20 },
-      6: { cellWidth: 20 },
-      7: { cellWidth: 20 }
+      1: { cellWidth: 25 },
+      2: { cellWidth: 20 },
+      3: { cellWidth: 35 },
+      4: { cellWidth: 18 },
+      5: { cellWidth: 18 },
+      6: { cellWidth: 18 },
+      7: { cellWidth: 18 },
+      8: { cellWidth: 20 }
     }
   });
 
   doc.save(filename);
+};
+
+// --- Helpers ---
+
+const getUserInfo = () => {
+  const user = auth.currentUser;
+  if (!user) return { photoURL: null, initials: 'DS', displayName: 'User' };
+  
+  const initials = user.displayName 
+    ? user.displayName.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2)
+    : user.email?.substring(0, 2).toUpperCase() || 'DS';
+    
+  return {
+    photoURL: user.photoURL,
+    initials,
+    displayName: user.displayName || 'User'
+  };
+};
+
+const BusinessLogo = ({ className = "w-12 h-12" }: { className?: string }) => {
+  const { photoURL, initials } = getUserInfo();
+  
+  return (
+    <div className={`${className} rounded-full border-2 border-primary/20 bg-primary/10 flex items-center justify-center overflow-hidden shadow-sm shrink-0`}>
+      {photoURL ? (
+        <img src={photoURL} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+      ) : (
+        <span className="text-primary font-black text-xs">{initials}</span>
+      )}
+    </div>
+  );
 };
 
 // --- Components ---
@@ -210,15 +365,9 @@ function ProfileDropdown({ profile, onLogout, lang, setLang, currentTheme, setTh
     <div className="relative" ref={dropdownRef}>
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 p-1 rounded-full hover:bg-white/20 transition-all border border-white/30 bg-white/10"
+        className="flex items-center gap-2 p-1 rounded-full hover:bg-primary/10 transition-all border border-white/30 bg-primary/5"
       >
-        <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center shadow-soft overflow-hidden">
-          {profile?.logo ? (
-            <img src={profile.logo} alt="Logo" className="w-full h-full object-cover" />
-          ) : (
-            <User className="w-5 h-5 text-primary" />
-          )}
-        </div>
+        <BusinessLogo className="w-10 h-10" />
       </button>
 
       <AnimatePresence>
@@ -349,83 +498,6 @@ function ProfileDropdown({ profile, onLogout, lang, setLang, currentTheme, setTh
   );
 }
 
-function QRSlider({ qrCodes }: { qrCodes: string[] }) {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [isFading, setIsFading] = useState(false);
-
-  if (!qrCodes || qrCodes.length === 0) return null;
-
-  const handleNext = () => {
-    setIsFading(true);
-    setTimeout(() => {
-      setCurrentIndex((prev) => (prev === qrCodes.length - 1 ? 0 : prev + 1));
-      setIsFading(false);
-    }, 200);
-  };
-
-  const handlePrev = () => {
-    setIsFading(true);
-    setTimeout(() => {
-      setCurrentIndex((prev) => (prev === 0 ? qrCodes.length - 1 : prev - 1));
-      setIsFading(false);
-    }, 200);
-  };
-
-  return (
-    <div className="bg-card p-6 rounded-2xl border border-border shadow-soft">
-      <div className="flex justify-center mb-6">
-        <div className="teal-gradient px-5 py-2 rounded-xl shadow-soft">
-          <p className="text-xs font-black text-white uppercase tracking-widest text-center">Scan to Pay</p>
-        </div>
-      </div>
-      
-      <div className="relative group aspect-square max-w-60 mx-auto flex items-center justify-center">
-        <div className={`w-full h-full transition-opacity duration-200 ${isFading ? 'opacity-0' : 'opacity-100'}`}>
-          <img 
-            src={qrCodes[currentIndex]} 
-            alt={`QR ${currentIndex + 1}`} 
-            className="w-full h-full object-contain rounded-xl"
-          />
-        </div>
-        
-        {qrCodes.length > 1 && (
-          <>
-            <button 
-              onClick={handlePrev}
-              className="absolute left-[-12px] top-1/2 -translate-y-1/2 w-11 h-11 bg-white border border-border rounded-full shadow-soft flex items-center justify-center hover:bg-background transition-all active:scale-90 z-10"
-            >
-              <ChevronLeft className="w-6 h-6 text-primary" />
-            </button>
-            <button 
-              onClick={handleNext}
-              className="absolute right-[-12px] top-1/2 -translate-y-1/2 w-11 h-11 bg-white border border-border rounded-full shadow-soft flex items-center justify-center hover:bg-background transition-all active:scale-90 z-10"
-            >
-              <ChevronRight className="w-6 h-6 text-primary" />
-            </button>
-          </>
-        )}
-      </div>
-
-      {qrCodes.length > 1 && (
-        <div className="flex justify-center gap-2 mt-6">
-          {qrCodes.map((_, i) => (
-            <button 
-              key={i} 
-              onClick={() => {
-                setIsFading(true);
-                setTimeout(() => {
-                  setCurrentIndex(i);
-                  setIsFading(false);
-                }, 200);
-              }}
-              className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${i === currentIndex ? 'bg-primary w-6' : 'bg-border'}`}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // --- Page 1: Login ---
 function LoginPage({ lang, setLang, theme, setTheme }: { 
@@ -437,11 +509,14 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
   const navigate = useNavigate();
   const slogan = useMemo(() => SLOGANS[Math.floor(Math.random() * SLOGANS.length)], []);
   const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        const profile = localStorage.getItem('ds_register_profile');
+        const profile = await getUserProfile(user.uid);
         if (profile) {
           navigate('/billing');
         } else {
@@ -452,18 +527,36 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
     return () => unsubscribe();
   }, [navigate]);
 
-  const handleLogin = async () => {
+  const handleGoogleLogin = async () => {
     if (loading) return;
     setLoading(true);
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      if (result.user) {
-        // User session is handled by Firebase onAuthStateChanged
-        // We can store additional info if needed, but Firebase handles the token
+      await signInWithPopup(auth, googleProvider);
+    } catch (error: any) {
+      if (error.code === 'auth/popup-closed-by-user') {
+        console.log("User closed the popup");
+      } else {
+        console.error("Google login failed:", error);
+        alert("Login failed: " + (error.message || "Unknown error"));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+    setLoading(true);
+    try {
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
       }
     } catch (error: any) {
-      console.error("Login failed:", error);
-      alert("Login failed: " + (error.message || "Unknown error"));
+      console.error("Email auth failed:", error);
+      alert("Authentication failed: " + (error.message || "Unknown error"));
     } finally {
       setLoading(false);
     }
@@ -471,22 +564,74 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
 
   return (
     <Layout>
-      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-16rem)]">
+      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-16rem)] py-10">
         <div className="w-full max-w-md p-10 bg-card border border-border rounded-2xl shadow-soft">
           <div className="teal-gradient px-8 py-4 rounded-2xl mb-10 w-full text-center shadow-soft">
             <h2 className="text-3xl font-black text-white tracking-tighter uppercase">Welcome</h2>
           </div>
+          
           <button
-            onClick={handleLogin}
+            onClick={handleGoogleLogin}
             disabled={loading}
-            className={`w-full flex items-center justify-center gap-4 px-8 py-4 bg-white border border-border rounded-2xl hover:bg-background transition-all shadow-soft active:scale-[0.98] group ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`w-full flex items-center justify-center gap-4 px-8 py-4 bg-input border border-border rounded-2xl hover:bg-background transition-all shadow-soft active:scale-[0.98] group mb-8 ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <img src="https://www.google.com/favicon.ico" alt="Google" className="w-6 h-6" />
             <span className="font-bold text-text group-hover:text-primary transition-colors">
               {loading ? 'Connecting...' : 'Login with Google'}
             </span>
           </button>
+
+          <div className="relative mb-8">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-border"></div>
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-card px-4 text-text/40 font-black tracking-widest">Or continue with email</span>
+            </div>
+          </div>
+
+          <form onSubmit={handleEmailAuth} className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">Email Address</label>
+              <input 
+                required
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                className="w-full px-5 py-3 bg-input border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-text"
+                placeholder="name@example.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">Password</label>
+              <input 
+                required
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="w-full px-5 py-3 bg-input border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-text"
+                placeholder="••••••••"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-4 bg-primary text-white font-black rounded-xl hover:opacity-90 transition-all shadow-soft uppercase tracking-widest text-sm mt-4"
+            >
+              {loading ? 'Processing...' : (isSignUp ? 'Create Account' : 'Login')}
+            </button>
+          </form>
+
+          <div className="mt-8 text-center">
+            <button 
+              onClick={() => setIsSignUp(!isSignUp)}
+              className="text-sm font-bold text-primary hover:underline"
+            >
+              {isSignUp ? 'Already have an account? Login' : "Don't have an account? Sign Up"}
+            </button>
+          </div>
         </div>
+        
         <div className="mt-16 text-center max-w-sm px-6">
           <p className="text-text/40 italic font-medium leading-relaxed">
             "{slogan}"
@@ -506,69 +651,88 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
 }) {
   const navigate = useNavigate();
   const t = TRANSLATIONS[lang];
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  
+  const [formData, setFormData] = useState<Partial<BusinessProfile>>({
+    businessName: '',
+    mobileNumber: '',
+    email: '',
+    address: '',
+    gstNumber: ''
+  });
 
-  const [formData, setFormData] = useState<Partial<BusinessProfile>>(() => {
-    const saved = localStorage.getItem('ds_register_profile');
-    return saved ? JSON.parse(saved) : {
-      businessName: '',
-      mobileNumber: '',
-      email: '',
-      address: '',
-      gstNumber: '',
-      qrCodes: []
+  useEffect(() => {
+    const fetchProfile = async () => {
+      const user = auth.currentUser;
+      if (user) {
+        const profile = await getUserProfile(user.uid);
+        if (profile) {
+          setFormData(profile);
+        }
+      }
+      setLoading(false);
     };
-  });
-
-  const [logo, setLogo] = useState<string | null>(formData.logo || null);
-  const [qrPreviews, setQrPreviews] = useState<(string | null)[]>(() => {
-    const qrs = formData.qrCodes || [];
-    return [qrs[0] || null, qrs[1] || null, qrs[2] || null];
-  });
+    fetchProfile();
+  }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'logo' | 'qr', index?: number) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64 = reader.result as string;
-      if (type === 'logo') {
-        setLogo(base64);
-      } else if (typeof index === 'number') {
-        const newPreviews = [...qrPreviews];
-        newPreviews[index] = base64;
-        setQrPreviews(newPreviews);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const filledQrs = qrPreviews.filter(q => q !== null);
-    if (filledQrs.length === 0) {
-      alert(t.qrMandatory);
-      return;
+    // Clear error when user starts typing
+    if (errors[name]) {
+      setErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors[name];
+        return newErrors;
+      });
     }
-
-    const finalData: BusinessProfile = {
-      businessName: formData.businessName!,
-      mobileNumber: formData.mobileNumber!,
-      email: formData.email!,
-      address: formData.address!,
-      gstNumber: formData.gstNumber,
-      logo: logo || undefined,
-      qrCodes: filledQrs as string[]
-    };
-
-    localStorage.setItem('ds_register_profile', JSON.stringify(finalData));
-    navigate('/billing');
   };
+
+  const validate = () => {
+    const newErrors: Record<string, string> = {};
+    if (!formData.businessName?.trim()) newErrors.businessName = "Business name is required";
+    if (!formData.mobileNumber?.trim()) newErrors.mobileNumber = "Mobile number is required";
+    if (!formData.address?.trim()) newErrors.address = "Address is required";
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const user = auth.currentUser;
+    if (!user) return;
+
+    if (!validate()) return;
+
+    setSaving(true);
+    try {
+      const finalData: BusinessProfile = {
+        businessName: formData.businessName!.trim(),
+        mobileNumber: formData.mobileNumber!.trim(),
+        email: formData.email?.trim() || '',
+        address: formData.address!.trim(),
+        gstNumber: formData.gstNumber?.trim() || ''
+      };
+
+      await saveUserProfile(user.uid, finalData);
+      navigate('/billing');
+    } catch (error: any) {
+      console.error("Failed to save profile:", error);
+      alert("Failed to save profile: " + (error.message || "Please try again."));
+      setSaving(false); // Re-enable button on error
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <Layout>
@@ -577,43 +741,50 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
           <h2 className="text-2xl font-black text-white tracking-tighter uppercase">{t.setupTitle}</h2>
         </div>
         
+        <div className="flex items-center gap-6 mb-10 bg-card p-6 rounded-2xl border border-border shadow-soft">
+          <BusinessLogo className="w-20 h-20" />
+          <div>
+            <h3 className="text-lg font-black text-text tracking-tighter uppercase">Business Identity</h3>
+            <p className="text-xs text-text/50 font-bold">Using your Google profile photo as business logo</p>
+          </div>
+        </div>
+        
         <form onSubmit={handleSubmit} className="space-y-8">
           <div className="bg-card p-8 rounded-2xl border border-border shadow-soft space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-xs font-black text-text/50 uppercase tracking-widest">{t.businessName}</label>
                 <input
-                  required
                   name="businessName"
                   value={formData.businessName}
                   onChange={handleInputChange}
-                  className="w-full px-5 py-4 bg-white border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-bold text-black"
+                  className={`w-full px-5 py-4 bg-input border ${errors.businessName ? 'border-red-500' : 'border-border'} rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-bold text-text`}
                   placeholder="Enter business name"
                 />
+                {errors.businessName && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight">{errors.businessName}</p>}
               </div>
               <div className="space-y-2">
                 <label className="text-xs font-black text-text/50 uppercase tracking-widest">{t.mobileNumber}</label>
                 <input
-                  required
                   type="tel"
                   name="mobileNumber"
                   value={formData.mobileNumber}
                   onChange={handleInputChange}
-                  className="w-full px-5 py-4 bg-white border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-bold text-black"
+                  className={`w-full px-5 py-4 bg-input border ${errors.mobileNumber ? 'border-red-500' : 'border-border'} rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-bold text-text`}
                   placeholder="Enter mobile number"
                 />
+                {errors.mobileNumber && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight">{errors.mobileNumber}</p>}
               </div>
             </div>
 
             <div className="space-y-2">
               <label className="text-xs font-black text-text/50 uppercase tracking-widest">{t.email}</label>
               <input
-                required
                 type="email"
                 name="email"
                 value={formData.email}
                 onChange={handleInputChange}
-                className="w-full px-5 py-4 bg-white border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-bold text-black"
+                className="w-full px-5 py-4 bg-input border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-bold text-text"
                 placeholder="Enter business email"
               />
             </div>
@@ -621,14 +792,14 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
             <div className="space-y-2">
               <label className="text-xs font-black text-text/50 uppercase tracking-widest">{t.address}</label>
               <textarea
-                required
                 name="address"
                 value={formData.address}
                 onChange={handleInputChange}
                 rows={3}
-                className="w-full px-5 py-4 bg-white border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all resize-none font-bold text-black"
+                className={`w-full px-5 py-4 bg-input border ${errors.address ? 'border-red-500' : 'border-border'} rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all resize-none font-bold text-text`}
                 placeholder="Enter business address"
               />
+              {errors.address && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight">{errors.address}</p>}
             </div>
 
             <div className="space-y-2">
@@ -639,77 +810,23 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
                 name="gstNumber"
                 value={formData.gstNumber}
                 onChange={handleInputChange}
-                className="w-full px-5 py-4 bg-white border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all uppercase font-bold text-black"
+                className="w-full px-5 py-4 bg-input border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all uppercase font-bold text-text"
                 placeholder="Enter GST number"
               />
             </div>
           </div>
 
-          <div className="bg-card p-8 rounded-2xl border border-border shadow-soft space-y-8">
-            <div>
-              <div className="bg-primary/10 px-5 py-2 rounded-xl inline-block mb-6 border border-primary/20">
-                <label className="text-xs font-black text-primary uppercase tracking-widest block">
-                  {t.logoUpload} <span className="text-primary/60 font-bold lowercase">{t.optional}</span>
-                </label>
-              </div>
-              <div className="flex items-center gap-6">
-                <label className="cursor-pointer group">
-                  <div className="w-28 h-28 border-2 border-dashed border-border rounded-2xl flex flex-col items-center justify-center bg-background group-hover:bg-primary/5 group-hover:border-primary transition-all overflow-hidden relative">
-                    {logo ? (
-                      <img src={logo} alt="Logo" className="w-full h-full object-cover" />
-                    ) : (
-                      <>
-                        <Upload className="w-8 h-8 text-text/30 group-hover:text-primary mb-2" />
-                        <span className="text-[0.625rem] font-black text-text/30 group-hover:text-primary">UPLOAD</span>
-                      </>
-                    )}
-                    <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileChange(e, 'logo')} />
-                  </div>
-                </label>
-                {logo && (
-                  <button 
-                    type="button"
-                    onClick={() => setLogo(null)}
-                    className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-                  >
-                    <Trash2 className="w-6 h-6" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-baseline justify-between mb-6">
-                <div className="bg-primary/10 px-5 py-2 rounded-xl inline-block border border-primary/20">
-                  <label className="text-xs font-black text-primary uppercase tracking-widest">{t.qrCodesTitle}</label>
-                </div>
-                <span className="text-[0.625rem] text-primary font-black uppercase tracking-widest">{t.qrMandatory}</span>
-              </div>
-              <div className="grid grid-cols-3 gap-6">
-                {[0, 1, 2].map((idx) => (
-                  <label key={idx} className="cursor-pointer group">
-                    <div className="aspect-square border-2 border-dashed border-border rounded-2xl flex flex-col items-center justify-center bg-background group-hover:bg-primary/5 group-hover:border-primary transition-all overflow-hidden relative">
-                      {qrPreviews[idx] ? (
-                        <img src={qrPreviews[idx]!} alt={`QR ${idx + 1}`} className="w-full h-full object-cover" />
-                      ) : (
-                        <>
-                          <Plus className="w-8 h-8 text-text/30 group-hover:text-primary mb-2" />
-                          <span className="text-[0.625rem] font-black text-text/30 group-hover:text-primary uppercase">QR {idx + 1}</span>
-                        </>
-                      )}
-                      <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileChange(e, 'qr', idx)} />
-                    </div>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-
           <button
             type="submit"
-            className="w-full py-5 bg-[#81c784] text-black font-black rounded-2xl hover:opacity-90 transition-all shadow-soft active:scale-[0.99] mt-10 tracking-widest text-lg uppercase"
+            disabled={saving}
+            className={`w-full py-5 bg-primary text-white font-black rounded-2xl hover:opacity-90 transition-all shadow-soft active:scale-[0.99] mt-10 tracking-widest text-lg uppercase flex items-center justify-center gap-2 ${saving ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            {t.submit}
+            {saving ? (
+              <>
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                SAVING...
+              </>
+            ) : t.submit}
           </button>
         </form>
       </div>
@@ -727,26 +844,36 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
   const navigate = useNavigate();
   const t = TRANSLATIONS[lang];
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const [customer, setCustomer] = useState({
     name: '',
     mobile: '',
-    email: '',
-    idNo: ''
+    vehicleNumber: '',
+    remarks: ''
   });
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedServices, setSelectedServices] = useState<{ name: string, price: number }[]>([]);
   const [gstPercent, setGstPercent] = useState<number | ''>('');
   const [amountPaid, setAmountPaid] = useState<number | ''>('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    const saved = localStorage.getItem('ds_register_profile');
-    if (!saved) {
-      navigate('/setup');
-    } else {
-      setProfile(JSON.parse(saved));
-    }
+    const fetchProfile = async () => {
+      const user = auth.currentUser;
+      if (user) {
+        const p = await getUserProfile(user.uid);
+        if (!p) {
+          navigate('/setup');
+        } else {
+          setProfile(p);
+        }
+      }
+      setLoading(false);
+    };
+    fetchProfile();
   }, [navigate]);
 
   const allServices = useMemo(() => {
@@ -763,8 +890,6 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
   const subtotal = selectedServices.reduce((sum, s) => sum + s.price, 0);
   const gstAmount = gstPercent ? (subtotal * (gstPercent / 100)) : 0;
   const total = subtotal + gstAmount;
-  const balance = amountPaid ? Math.max(0, total - amountPaid) : total;
-  const pending = balance;
 
   const handleAddService = (name: string) => {
     if (!selectedServices.find(s => s.name === name)) {
@@ -781,65 +906,83 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
     setSelectedServices(selectedServices.map(s => s.name === name ? { ...s, price } : s));
   };
 
-  const handlePrint = () => {
-    const currentTx: Transaction = {
-      id: 'DRAFT-' + Date.now().toString(),
-      date: new Date().toISOString(),
+  const handlePrint = async () => {
+    const currentTx: any = {
       customerName: customer.name || 'Customer',
       customerMobile: customer.mobile || '',
-      customerEmail: customer.email,
-      customerIdNo: customer.idNo,
+      vehicleNumber: customer.vehicleNumber,
+      remarks: customer.remarks,
       services: selectedServices,
-      gstPercent: gstPercent || undefined,
+      subtotal: subtotal,
+      tax: gstAmount,
       totalAmount: total,
-      amountPaid: Number(amountPaid) || 0,
-      balanceAmount: balance,
-      pendingAmount: pending
+      paymentStatus: 'Unpaid'
     };
-    generateReceiptPDF(currentTx, profile);
+    await generateReceiptPDF(currentTx, profile, theme);
   };
 
-  const handleSave = () => {
-    if (!customer.name || !customer.mobile) {
-      alert("Customer name and mobile are mandatory");
-      return;
+  const validate = () => {
+    const newErrors: Record<string, string> = {};
+    if (!customer.name?.trim()) {
+      newErrors.customerName = "Customer name is required";
     }
     if (selectedServices.length === 0) {
-      alert("Please select at least one service");
-      return;
+      newErrors.services = "At least one service is required";
     }
+    if (total <= 0) {
+      newErrors.total = "Total amount must be greater than 0";
+    }
+    if (amountPaid !== '' && Number(amountPaid) < 0) {
+      newErrors.amountPaid = "Amount paid cannot be negative";
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
-    const transaction: Transaction = {
-      id: 'TX-' + Date.now().toString() + '-' + Math.floor(Math.random() * 1000),
-      date: new Date().toISOString(),
-      customerName: customer.name,
-      customerMobile: customer.mobile,
-      customerEmail: customer.email,
-      customerIdNo: customer.idNo,
-      services: selectedServices,
-      gstPercent: gstPercent || undefined,
-      totalAmount: total,
-      amountPaid: Number(amountPaid) || 0,
-      balanceAmount: balance,
-      pendingAmount: pending
-    };
+  const handleSave = async () => {
+    const user = auth.currentUser;
+    if (!user || !profile) return;
 
+    if (!validate()) return;
+
+    setSaving(true);
     try {
-      const savedHistory = JSON.parse(localStorage.getItem('ds_register_history') || '[]');
-      localStorage.setItem('ds_register_history', JSON.stringify([transaction, ...savedHistory]));
+      const paid = amountPaid === '' ? 0 : Number(amountPaid);
+      const status = paid >= total ? 'Paid' : 'Unpaid';
+      const due = Math.max(0, total - paid);
+
+      const transaction: Omit<Transaction, 'id' | 'createdAt'> = {
+        customerName: customer.name.trim(),
+        customerMobile: customer.mobile.trim(),
+        vehicleNumber: customer.vehicleNumber.trim(),
+        remarks: customer.remarks.trim(),
+        services: selectedServices,
+        subtotal: subtotal,
+        tax: gstAmount,
+        totalAmount: total,
+        amountPaid: paid,
+        dueAmount: due,
+        paymentStatus: status
+      };
+
+      await saveTransaction(user.uid, transaction);
       
       // Reset form
-      setCustomer({ name: '', mobile: '', email: '', idNo: '' });
+      setCustomer({ name: '', mobile: '', vehicleNumber: '', remarks: '' });
       setSelectedServices([]);
       setGstPercent('');
       setAmountPaid('');
       setSearchQuery('');
+      setErrors({});
       
       alert("Transaction saved successfully!");
       navigate('/history');
     } catch (error) {
       console.error("Error saving transaction:", error);
       alert("Failed to save transaction. Please try again.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -852,6 +995,14 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
       navigate('/');
     }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <Layout 
@@ -866,7 +1017,6 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
             setTheme={setTheme}
           />
           <div className="flex items-center gap-3">
-            {profile?.logo && <img src={profile.logo} alt="Logo" className="w-10 h-10 rounded-xl object-cover border border-white/20 shadow-soft" />}
             <h1 className="text-xl font-black text-white tracking-tighter">{profile?.businessName || 'DS-REGISTER'}</h1>
           </div>
         </div>
@@ -886,34 +1036,33 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
                   required
                   value={customer.name}
                   onChange={e => setCustomer({...customer, name: e.target.value})}
-                  className="w-full px-5 py-3 bg-white border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-black"
+                  className={`w-full px-5 py-3 bg-input border ${errors.customerName ? 'border-red-500' : 'border-border'} rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-text`}
                 />
+                {errors.customerName && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight">{errors.customerName}</p>}
               </div>
               <div className="space-y-2">
-                <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{t.customerMobile}</label>
+                <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{t.customerMobile} <span className="text-text/30 font-bold lowercase">{t.optional}</span></label>
                 <input 
-                  required
                   type="tel"
                   value={customer.mobile}
                   onChange={e => setCustomer({...customer, mobile: e.target.value})}
-                  className="w-full px-5 py-3 bg-white border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-black"
+                  className="w-full px-5 py-3 bg-input border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-text"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{t.customerEmail} <span className="text-text/30 font-bold lowercase">{t.optional}</span></label>
+                <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{t.vehicleNumber} <span className="text-text/30 font-bold lowercase">{t.optional}</span></label>
                 <input 
-                  type="email"
-                  value={customer.email}
-                  onChange={e => setCustomer({...customer, email: e.target.value})}
-                  className="w-full px-5 py-3 bg-white border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-black"
+                  value={customer.vehicleNumber}
+                  onChange={e => setCustomer({...customer, vehicleNumber: e.target.value})}
+                  className="w-full px-5 py-3 bg-input border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-text"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{t.idNo} <span className="text-text/30 font-bold lowercase">{t.optional}</span></label>
+                <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{t.remarks} <span className="text-text/30 font-bold lowercase">{t.optional}</span></label>
                 <input 
-                  value={customer.idNo}
-                  onChange={e => setCustomer({...customer, idNo: e.target.value})}
-                  className="w-full px-5 py-3 bg-white border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-black"
+                  value={customer.remarks}
+                  onChange={e => setCustomer({...customer, remarks: e.target.value})}
+                  className="w-full px-5 py-3 bg-input border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary font-bold text-text"
                 />
               </div>
             </div>
@@ -924,6 +1073,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
             <div className="bg-primary/10 px-5 py-2 rounded-xl inline-block mb-8 border border-primary/20">
               <h3 className="text-xs font-black text-primary uppercase tracking-widest">{t.serviceNeeds}</h3>
             </div>
+            {errors.services && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight mb-4">{errors.services}</p>}
             
             <div className="relative mb-10">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -934,7 +1084,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
                 placeholder={t.searchServices}
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                className="block w-full pl-12 pr-4 py-4 border border-border rounded-2xl bg-white outline-none focus:ring-2 focus:ring-primary font-bold text-black"
+                className="block w-full pl-12 pr-4 py-4 border border-border rounded-2xl bg-input outline-none focus:ring-2 focus:ring-primary font-bold text-text"
               />
               
               {searchQuery && (
@@ -965,7 +1115,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
                 <div key={category} className="space-y-2">
                   <p className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{category}</p>
                   <select 
-                    className="w-full px-4 py-3 bg-white border border-border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-primary text-black appearance-none"
+                    className="w-full px-4 py-3 bg-input border border-border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-primary text-text appearance-none"
                     onChange={(e) => { if(e.target.value) handleAddService(e.target.value); e.target.value = ""; }}
                   >
                     <option value="">Select Service</option>
@@ -982,18 +1132,18 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
                 <h4 className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{t.selectedServices}</h4>
                 <div className="space-y-4">
                   {selectedServices.map(s => (
-                    <div key={s.name} className="flex items-center gap-6 p-5 bg-white rounded-2xl border border-border group hover:border-primary/30 transition-all">
+                    <div key={s.name} className="flex items-center gap-6 p-5 bg-input rounded-2xl border border-border group hover:border-primary/30 transition-all">
                       <div className="flex-1">
-                        <p className="text-sm font-black text-black">{s.name}</p>
+                        <p className="text-sm font-black text-text">{s.name}</p>
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className="text-sm font-black text-black/40">₹</span>
+                        <span className="text-sm font-black text-text/40">₹</span>
                         <input
                           type="number"
                           placeholder={t.price}
                           value={s.price || ''}
                           onChange={e => handlePriceChange(s.name, Number(e.target.value))}
-                          className="w-28 px-4 py-2 bg-white border border-border rounded-xl text-sm font-black outline-none focus:ring-2 focus:ring-primary text-black"
+                          className="w-28 px-4 py-2 bg-input border border-border rounded-xl text-sm font-black outline-none focus:ring-2 focus:ring-primary text-text"
                         />
                         <button 
                           onClick={() => handleRemoveService(s.name)}
@@ -1032,7 +1182,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
                     type="number"
                     value={gstPercent}
                     onChange={e => setGstPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-20 bg-white border border-border rounded-xl px-3 py-2 text-right text-sm font-black outline-none focus:border-primary transition-all text-black"
+                    className="w-20 bg-input border border-border rounded-xl px-3 py-2 text-right text-sm font-black outline-none focus:border-primary transition-all text-text"
                   />
                   <span className="text-sm font-bold text-text/30">%</span>
                 </div>
@@ -1050,41 +1200,33 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
                   <input
                     type="number"
                     value={amountPaid}
+                    placeholder="Enter amount received"
                     onChange={e => setAmountPaid(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full bg-white border border-border rounded-2xl pl-10 pr-5 py-4 text-2xl font-black outline-none focus:ring-2 focus:ring-primary transition-all text-black"
+                    className={`w-full bg-input border ${errors.amountPaid ? 'border-red-500' : 'border-border'} rounded-2xl pl-10 pr-5 py-4 text-2xl font-black outline-none focus:ring-2 focus:ring-primary transition-all text-text hover:border-primary/50`}
                   />
                 </div>
+                {errors.amountPaid && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight">{errors.amountPaid}</p>}
               </div>
 
-              <div className="grid grid-cols-2 gap-4 pt-4">
-                <div className="bg-background p-4 rounded-2xl border border-border">
-                  <p className="text-[0.5rem] font-black text-text/30 uppercase tracking-widest mb-1">{t.balance}</p>
-                  <p className="text-lg font-black text-primary">₹{balance.toFixed(2)}</p>
-                </div>
-                <div className="bg-background p-4 rounded-2xl border border-border">
-                  <p className="text-[0.5rem] font-black text-text/30 uppercase tracking-widest mb-1">{t.pending}</p>
-                  <p className="text-lg font-black text-red-500">₹{pending.toFixed(2)}</p>
-                </div>
-              </div>
+              {errors.total && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight mt-4 text-center">{errors.total}</p>}
             </div>
 
             <div className="grid grid-cols-1 gap-4 mt-10 relative z-10">
               <button
                 onClick={handleSave}
-                className="w-full py-5 bg-[#81c784] text-black font-black rounded-2xl hover:opacity-90 transition-all shadow-soft active:scale-[0.98] uppercase tracking-widest"
+                disabled={saving}
+                className={`w-full py-5 ${saving ? 'bg-gray-400 cursor-not-allowed' : 'bg-primary hover:opacity-90'} text-white font-black rounded-2xl transition-all shadow-soft active:scale-[0.98] uppercase tracking-widest flex items-center justify-center gap-2`}
               >
-                {t.save}
-              </button>
-              <button
-                onClick={handlePrint}
-                className="w-full py-4 bg-[#1b5e20] text-white font-black rounded-2xl hover:opacity-90 transition-all flex items-center justify-center gap-3 border border-transparent uppercase tracking-widest text-xs"
-              >
-                <Upload className="w-5 h-5 rotate-180" /> {t.printReceipt}
+                {saving ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                    SAVING...
+                  </>
+                ) : t.save}
               </button>
             </div>
           </section>
 
-          {profile?.qrCodes && <QRSlider qrCodes={profile.qrCodes} />}
         </div>
       </div>
     </Layout>
@@ -1109,29 +1251,65 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [loading, setLoading] = useState(true);
+
+  const [isAddPaymentOpen, setIsAddPaymentOpen] = useState(false);
+  const [additionalAmount, setAdditionalAmount] = useState<number | ''>('');
+  const [isUpdatingPayment, setIsUpdatingPayment] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
+
+  const [isClearAllModalOpen, setIsClearAllModalOpen] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   useEffect(() => {
-    const savedProfile = localStorage.getItem('ds_register_profile');
-    if (!savedProfile) {
-      navigate('/setup');
-      return;
-    }
-    setProfile(JSON.parse(savedProfile));
-
-    const savedHistory = localStorage.getItem('ds_register_history');
-    if (savedHistory) {
-      setHistory(JSON.parse(savedHistory));
-    }
+    const fetchData = async () => {
+      const user = auth.currentUser;
+      if (user) {
+        const [p, h] = await Promise.all([
+          getUserProfile(user.uid),
+          getUserHistory(user.uid)
+        ]);
+        if (!p) {
+          navigate('/setup');
+        } else {
+          setProfile(p);
+          setHistory(h);
+        }
+      }
+      setLoading(false);
+    };
+    fetchData();
   }, [navigate]);
+
+  const monthlyStats = useMemo(() => {
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    const thisMonthTx = history.filter(tx => {
+      const date = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt || Date.now());
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+
+    const totalTransactions = thisMonthTx.length;
+    const totalRevenue = thisMonthTx
+      .filter(tx => tx.paymentStatus === 'Paid')
+      .reduce((sum, tx) => sum + tx.totalAmount, 0);
+    const totalPending = thisMonthTx.reduce((sum, tx) => sum + (tx.dueAmount || 0), 0);
+    const totalCollected = thisMonthTx.reduce((sum, tx) => sum + (tx.amountPaid || 0), 0);
+
+    return { totalTransactions, totalRevenue, totalPending, totalCollected };
+  }, [history]);
 
   const filteredHistory = useMemo(() => {
     return history.filter(tx => {
       const matchesSearch = 
         tx.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        tx.customerMobile.includes(searchQuery) ||
-        (tx.customerIdNo?.toLowerCase().includes(searchQuery.toLowerCase()));
+        (tx.customerMobile || '').includes(searchQuery) ||
+        (tx.vehicleNumber?.toLowerCase().includes(searchQuery.toLowerCase()));
       
-      const matchesFilter = filterUnpaid ? tx.pendingAmount > 0 : true;
+      const matchesFilter = filterUnpaid ? tx.paymentStatus === 'Unpaid' : true;
       
       return matchesSearch && matchesFilter;
     });
@@ -1148,31 +1326,49 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
   };
 
   const handleClearAll = () => {
-    if (window.confirm(t.confirmClear)) {
-      localStorage.removeItem('ds_register_history');
+    setIsClearAllModalOpen(true);
+    setIsSettingsOpen(false);
+  };
+
+  const performClearAll = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    setIsDeletingAll(true);
+    setDeleteError('');
+
+    try {
+      await clearUserHistory(user.uid);
       setHistory([]);
-      setIsSettingsOpen(false);
+      setIsClearAllModalOpen(false);
+      alert("All transactions deleted successfully.");
+    } catch (error) {
+      console.error("Failed to clear history:", error);
+      setDeleteError("Failed to delete transactions. Please try again.");
+    } finally {
+      setIsDeletingAll(false);
     }
   };
 
-  const handleDownloadAll = () => {
+  const handleDownloadAll = async () => {
     if (history.length === 0) {
       alert("No transactions to download.");
       return;
     }
-    generateTransactionsPDF(
+    await generateTransactionsPDF(
       history, 
       profile, 
       'ALL TRANSACTIONS REPORT', 
-      `All_Transactions_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`
+      `All_Transactions_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`,
+      theme
     );
     setIsSettingsOpen(false);
   };
 
-  const handleDownloadMonthly = () => {
+  const handleDownloadMonthly = async () => {
     const monthName = new Intl.DateTimeFormat('en-US', { month: 'long' }).format(new Date(selectedYear, selectedMonth));
     const monthlyHistory = history.filter(tx => {
-      const date = new Date(tx.date);
+      const date = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt || Date.now());
       return date.getMonth() === selectedMonth && date.getFullYear() === selectedYear;
     });
 
@@ -1181,57 +1377,79 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       return;
     }
 
-    generateTransactionsPDF(
+    await generateTransactionsPDF(
       monthlyHistory, 
       profile, 
       `${monthName.toUpperCase()} ${selectedYear} TRANSACTIONS`, 
-      `Transactions_${monthName}_${selectedYear}.pdf`
+      `Transactions_${monthName}_${selectedYear}.pdf`,
+      theme
     );
     setIsMonthPickerOpen(false);
     setIsSettingsOpen(false);
   };
 
-  const handleMarkAsPaid = (id: string) => {
-    const txToUpdate = history.find(t => t.id === id);
-    if (!txToUpdate || txToUpdate.pendingAmount <= 0) return;
+  const handleUpdatePayment = async () => {
+    const user = auth.currentUser;
+    if (!user || !selectedTx) return;
 
-    if (window.confirm(t.confirmPaid)) {
-      const savedHistory = localStorage.getItem('ds_register_history');
-      const currentHistory = savedHistory ? JSON.parse(savedHistory) : history;
-      
-      const updatedHistory = currentHistory.map((tx: Transaction) => {
-        if (tx.id === id) {
-          return { 
-            ...tx, 
-            amountPaid: tx.totalAmount, 
-            pendingAmount: 0, 
-            balanceAmount: 0,
-            status: 'Fully Paid' // Ensure status is updated if used
-          };
+    const amountToAdd = additionalAmount === '' ? 0 : Number(additionalAmount);
+    
+    if (amountToAdd <= 0) {
+      setPaymentError("Additional amount must be greater than 0");
+      return;
+    }
+
+    setIsUpdatingPayment(true);
+    setPaymentError('');
+
+    try {
+      const updatedAmountPaid = (selectedTx.amountPaid || 0) + amountToAdd;
+      const updatedDueAmount = Math.max(0, selectedTx.totalAmount - updatedAmountPaid);
+      const updatedStatus = updatedAmountPaid >= selectedTx.totalAmount ? 'Paid' : 'Unpaid';
+
+      const updates = {
+        amountPaid: updatedAmountPaid,
+        dueAmount: updatedDueAmount,
+        paymentStatus: updatedStatus as 'Paid' | 'Unpaid'
+      };
+
+      await updateTransactionStatus(user.uid, selectedTx.id, updates);
+
+      // Update local state
+      const updatedHistory = history.map(tx => {
+        if (tx.id === selectedTx.id) {
+          return { ...tx, ...updates };
         }
         return tx;
       });
-      
       setHistory(updatedHistory);
-      localStorage.setItem('ds_register_history', JSON.stringify(updatedHistory));
-      
-      if (selectedTx?.id === id) {
-        setSelectedTx({ 
-          ...selectedTx, 
-          amountPaid: selectedTx.totalAmount, 
-          pendingAmount: 0, 
-          balanceAmount: 0 
-        });
-      }
+      setSelectedTx({ ...selectedTx, ...updates });
+
+      setIsAddPaymentOpen(false);
+      setAdditionalAmount('');
+      alert("Payment updated successfully");
+    } catch (error) {
+      console.error("Failed to update payment:", error);
+      setPaymentError("Failed to update payment. Please try again.");
+    } finally {
+      setIsUpdatingPayment(false);
     }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   if (selectedTx) {
     return (
       <Layout 
         title={
           <div className="flex items-center gap-4">
-            <button onClick={() => setSelectedTx(null)} className="p-3 hover:bg-white/10 rounded-xl transition-all text-white">
+            <button onClick={() => setSelectedTx(null)} className="p-3 hover:bg-primary/10 rounded-xl transition-all text-white">
               <ChevronLeft className="w-6 h-6" />
             </button>
             <div className="teal-gradient px-5 py-2 rounded-xl shadow-soft border border-white/20">
@@ -1286,45 +1504,122 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
             </div>
 
             {/* Details Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-6 pt-2">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 pt-2">
               <div>
                 <p className="text-[0.625rem] font-black text-text/30 uppercase tracking-widest mb-1">{t.date}</p>
-                <p className="text-sm font-bold text-text">{new Date(selectedTx.date).toLocaleDateString()}</p>
+                <p className="text-sm font-bold text-text">
+                  {selectedTx.createdAt?.toDate ? selectedTx.createdAt.toDate().toLocaleDateString() : new Date(selectedTx.createdAt || Date.now()).toLocaleDateString()}
+                </p>
+              </div>
+              <div>
+                <p className="text-[0.625rem] font-black text-text/30 uppercase tracking-widest mb-1">Status</p>
+                <p className={`text-sm font-black ${selectedTx.paymentStatus === 'Paid' ? 'text-green-600' : 'text-red-600'}`}>
+                  {selectedTx.paymentStatus.toUpperCase()}
+                </p>
               </div>
               <div>
                 <p className="text-[0.625rem] font-black text-text/30 uppercase tracking-widest mb-1">{t.amountPaid}</p>
-                <p className="text-sm font-black text-primary">₹{selectedTx.amountPaid.toFixed(2)}</p>
+                <p className="text-sm font-black text-primary">₹{(selectedTx.amountPaid || 0).toFixed(2)}</p>
               </div>
-              <div className="col-span-2 md:col-span-1">
-                <p className="text-[0.625rem] font-black text-text/30 uppercase tracking-widest mb-1">{t.total}</p>
-                <p className="text-xl font-black text-text tracking-tighter">₹{selectedTx.totalAmount.toFixed(2)}</p>
+              <div>
+                <p className="text-[0.625rem] font-black text-text/30 uppercase tracking-widest mb-1">Due Amount</p>
+                <p className={`text-sm font-black ${selectedTx.dueAmount > 0 ? 'text-red-600' : 'text-text/30'}`}>₹{(selectedTx.dueAmount || 0).toFixed(2)}</p>
               </div>
+            </div>
+            <div className="mt-6 pt-6 border-t border-border">
+              <p className="text-[0.625rem] font-black text-text/30 uppercase tracking-widest mb-1">{t.total}</p>
+              <p className="text-3xl font-black text-text tracking-tighter">₹{selectedTx.totalAmount.toFixed(2)}</p>
             </div>
           </div>
 
           {/* Action Buttons */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <a 
-              href={`tel:${selectedTx.customerMobile}`}
-              className="flex items-center justify-center gap-3 py-4 bg-primary/10 text-primary font-black rounded-2xl hover:bg-primary hover:text-white transition-all shadow-soft uppercase tracking-widest text-[0.7rem]"
-            >
-              <Phone className="w-4 h-4" /> {t.callCustomer}
-            </a>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <button 
-              onClick={() => generateReceiptPDF(selectedTx, profile)}
+              onClick={async () => await generateReceiptPDF(selectedTx, profile, theme)}
               className="flex items-center justify-center gap-3 py-4 bg-[#1b5e20] text-white font-black rounded-2xl hover:opacity-90 transition-all shadow-soft uppercase tracking-widest text-[0.7rem]"
             >
               <Upload className="w-4 h-4 rotate-180" /> {t.printReceipt}
             </button>
-            {selectedTx.pendingAmount > 0 && (
+            {selectedTx.paymentStatus === 'Unpaid' && selectedTx.dueAmount > 0 && (
               <button 
-                onClick={() => handleMarkAsPaid(selectedTx.id)}
+                onClick={() => setIsAddPaymentOpen(true)}
                 className="flex items-center justify-center gap-3 py-4 bg-green-600 text-white font-black rounded-2xl hover:bg-green-700 transition-all shadow-soft uppercase tracking-widest text-[0.7rem]"
               >
-                <CheckCircle2 className="w-4 h-4" /> {t.markAsPaid}
+                <Plus className="w-4 h-4" /> ADD PAYMENT
               </button>
             )}
           </div>
+
+          {/* Add Payment Modal */}
+          <AnimatePresence>
+            {isAddPaymentOpen && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                  className="bg-card border border-border w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+                >
+                  <div className="p-8">
+                    <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-xl font-black text-text tracking-tight uppercase">Add Payment</h3>
+                      <button onClick={() => setIsAddPaymentOpen(false)} className="p-2 hover:bg-primary/10 rounded-full transition-colors">
+                        <X className="w-5 h-5 text-text/40" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-4 mb-8">
+                      <div className="flex justify-between items-center p-4 bg-background rounded-2xl border border-border">
+                        <span className="text-xs font-bold text-text/40 uppercase tracking-widest">Final Amount</span>
+                        <span className="text-lg font-black text-text">₹{selectedTx.totalAmount.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center p-4 bg-background rounded-2xl border border-border">
+                        <span className="text-xs font-bold text-text/40 uppercase tracking-widest">Already Paid</span>
+                        <span className="text-lg font-black text-primary">₹{(selectedTx.amountPaid || 0).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center p-4 bg-primary/5 rounded-2xl border border-primary/20">
+                        <span className="text-xs font-bold text-primary uppercase tracking-widest">Remaining Due</span>
+                        <span className="text-lg font-black text-red-500">₹{(selectedTx.dueAmount || 0).toFixed(2)}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 mb-8">
+                      <label className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest ml-1">Enter Additional Amount</label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text/30 font-black">₹</span>
+                        <input
+                          type="number"
+                          value={additionalAmount}
+                          onChange={e => setAdditionalAmount(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0.00"
+                          className={`w-full bg-input border ${paymentError ? 'border-red-500' : 'border-border'} rounded-2xl pl-10 pr-5 py-4 text-2xl font-black outline-none focus:ring-2 focus:ring-primary transition-all text-text`}
+                        />
+                      </div>
+                      {paymentError && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight ml-1">{paymentError}</p>}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <button 
+                        onClick={() => setIsAddPaymentOpen(false)}
+                        className="py-4 bg-background border border-border text-text/60 font-black rounded-2xl hover:bg-border transition-all uppercase tracking-widest text-xs"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={handleUpdatePayment}
+                        disabled={isUpdatingPayment}
+                        className={`py-4 ${isUpdatingPayment ? 'bg-gray-400 cursor-not-allowed' : 'bg-primary hover:opacity-90'} text-white font-black rounded-2xl transition-all shadow-soft uppercase tracking-widest text-xs flex items-center justify-center gap-2`}
+                      >
+                        {isUpdatingPayment ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        ) : 'Confirm'}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
         </div>
       </Layout>
     );
@@ -1343,16 +1638,15 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
             setTheme={setTheme}
           />
           <div className="flex items-center gap-3">
-            {profile?.logo && <img src={profile.logo} alt="Logo" className="w-10 h-10 rounded-xl object-cover border border-white/20 shadow-soft" />}
             <h1 className="text-xl font-black text-white tracking-tighter">{profile?.businessName || 'DS-REGISTER'}</h1>
           </div>
         </div>
       }
     >
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl mx-auto space-y-8">
         <div className="flex items-center justify-between mb-6 bg-primary/5 px-5 py-3 rounded-2xl border border-primary/10 shadow-soft">
           <div className="flex items-center gap-4">
-            <button onClick={() => navigate('/billing')} className="p-2 bg-white border border-border rounded-lg hover:bg-primary/5 transition-all text-primary shadow-soft">
+            <button onClick={() => navigate('/billing')} className="p-2 bg-card border border-border rounded-lg hover:bg-primary/5 transition-all text-primary shadow-soft">
               <ChevronLeft className="w-5 h-5" />
             </button>
             <h2 className="text-lg font-black text-text tracking-tighter uppercase">{t.historyTitle}</h2>
@@ -1361,7 +1655,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
           <div className="relative">
             <button 
               onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className="p-2 bg-white border border-border rounded-lg hover:bg-primary/5 transition-all text-text/40 shadow-soft"
+              className="p-2 bg-card border border-border rounded-lg hover:bg-primary/5 transition-all text-text/40 shadow-soft"
             >
               <Settings className="w-5 h-5" />
             </button>
@@ -1390,6 +1684,30 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
           </div>
         </div>
 
+        {/* Monthly Summary Dashboard */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-card p-5 rounded-2xl border border-border shadow-soft">
+            <p className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Transactions</p>
+            <p className="text-2xl font-black text-text">{monthlyStats.totalTransactions}</p>
+            <p className="text-[0.625rem] font-bold text-text/30 uppercase mt-1">This Month</p>
+          </div>
+          <div className="bg-card p-5 rounded-2xl border border-border shadow-soft">
+            <p className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Revenue</p>
+            <p className="text-2xl font-black text-green-600">₹{monthlyStats.totalRevenue.toLocaleString()}</p>
+            <p className="text-[0.625rem] font-bold text-text/30 uppercase mt-1">Fully Paid Only</p>
+          </div>
+          <div className="bg-card p-5 rounded-2xl border border-border shadow-soft">
+            <p className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Collected</p>
+            <p className="text-2xl font-black text-primary">₹{monthlyStats.totalCollected.toLocaleString()}</p>
+            <p className="text-[0.625rem] font-bold text-text/30 uppercase mt-1">Sum of Paid</p>
+          </div>
+          <div className="bg-card p-5 rounded-2xl border border-border shadow-soft">
+            <p className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Pending</p>
+            <p className="text-2xl font-black text-red-600">₹{monthlyStats.totalPending.toLocaleString()}</p>
+            <p className="text-[0.625rem] font-bold text-text/30 uppercase mt-1">Due Amount</p>
+          </div>
+        </div>
+
         <div className="flex flex-col md:flex-row gap-4 mb-6">
           <div className="flex-1 relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-text/30" />
@@ -1398,7 +1716,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
               placeholder={t.searchPlaceholder}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 bg-white border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary text-sm font-bold text-black shadow-soft"
+              className="w-full pl-12 pr-4 py-3 bg-input border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary text-sm font-bold text-text shadow-soft"
             />
           </div>
           <div className="flex gap-2">
@@ -1448,23 +1766,29 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                       </a>
                     </div>
                     <p className="text-xs text-text/50 font-bold">{tx.customerMobile}</p>
-                    {tx.customerIdNo && (
+                    {tx.vehicleNumber && (
+                      <div className="mt-2 inline-block px-2 py-0.5 bg-background rounded-md border border-border mr-2">
+                        <p className="text-[0.55rem] font-black text-text/40 uppercase tracking-widest">{tx.vehicleNumber}</p>
+                      </div>
+                    )}
+                    {tx.remarks && (
                       <div className="mt-2 inline-block px-2 py-0.5 bg-background rounded-md border border-border">
-                        <p className="text-[0.55rem] font-black text-text/40 uppercase tracking-widest">{tx.customerIdNo}</p>
+                        <p className="text-[0.55rem] font-black text-text/40 uppercase tracking-widest italic">{tx.remarks}</p>
                       </div>
                     )}
                     <div className="mt-3 flex items-center gap-2 text-[0.55rem] font-black text-text/30 uppercase tracking-widest">
                       <Calendar className="w-2.5 h-2.5" />
-                      <span>{new Date(tx.date).toLocaleDateString('en-IN')}</span>
+                      <span>{tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleDateString('en-IN') : new Date(tx.createdAt).toLocaleDateString('en-IN')}</span>
                       <span className="w-0.5 h-0.5 bg-text/20 rounded-full"></span>
                       <Clock className="w-2.5 h-2.5" />
-                      <span>{new Date(tx.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                      <span>{tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : new Date(tx.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                     </div>
                   </div>
                   <div className="text-right">
                     <p className="text-xl font-black text-text tracking-tighter">₹{tx.totalAmount.toFixed(2)}</p>
-                    <div className={`mt-1.5 inline-block px-3 py-0.5 rounded-full text-[0.55rem] font-black uppercase tracking-widest ${tx.pendingAmount > 0 ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-green-50 text-green-600 border border-green-100'}`}>
-                      {tx.pendingAmount > 0 ? `Pending: ₹${tx.pendingAmount.toFixed(2)}` : 'Fully Paid'}
+                    <div className={`mt-1.5 inline-block px-3 py-0.5 rounded-full text-[0.55rem] font-black uppercase tracking-widest ${tx.paymentStatus === 'Unpaid' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-green-50 text-green-600 border border-green-100'}`}>
+                      {tx.paymentStatus}
+                      {tx.paymentStatus === 'Unpaid' && tx.dueAmount > 0 && ` (Due: ₹${tx.dueAmount.toFixed(2)})`}
                     </div>
                   </div>
                 </div>
@@ -1498,7 +1822,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                     <select 
                       value={selectedMonth}
                       onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                      className="w-full px-4 py-3 bg-white border border-border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-primary text-black appearance-none"
+                      className="w-full px-4 py-3 bg-input border border-border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-primary text-text appearance-none"
                     >
                       {Array.from({ length: 12 }, (_, i) => (
                         <option key={i} value={i}>
@@ -1513,7 +1837,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                     <select 
                       value={selectedYear}
                       onChange={(e) => setSelectedYear(Number(e.target.value))}
-                      className="w-full px-4 py-3 bg-white border border-border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-primary text-black appearance-none"
+                      className="w-full px-4 py-3 bg-input border border-border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-primary text-text appearance-none"
                     >
                       {Array.from({ length: 5 }, (_, i) => {
                         const year = new Date().getFullYear() - i;
@@ -1541,6 +1865,61 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
             </div>
           )}
         </AnimatePresence>
+
+        {/* Clear All Transactions Modal */}
+        <AnimatePresence>
+          {isClearAllModalOpen && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                  className="bg-card border border-border w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+                >
+                  <div className="p-8">
+                    <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-xl font-black text-red-600 tracking-tight uppercase">Delete All Transactions</h3>
+                      <button onClick={() => setIsClearAllModalOpen(false)} className="p-2 hover:bg-red-50 rounded-full transition-colors">
+                        <X className="w-5 h-5 text-red-600/40" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-4 mb-8">
+                      <div className="p-6 bg-red-50 rounded-2xl border border-red-100">
+                        <p className="text-sm font-bold text-red-600 leading-relaxed">
+                          All transactions will be permanently deleted.
+                          <br />
+                          This action cannot be undone.
+                          <br />
+                          <span className="font-black">Please make sure you downloaded a backup before continuing.</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    {deleteError && <p className="text-red-500 text-[0.625rem] font-bold uppercase tracking-tight mb-4 ml-1">{deleteError}</p>}
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <button 
+                        onClick={() => setIsClearAllModalOpen(false)}
+                        className="py-4 bg-background border border-border text-text/60 font-black rounded-2xl hover:bg-border transition-all uppercase tracking-widest text-xs"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={performClearAll}
+                        disabled={isDeletingAll}
+                        className={`py-4 ${isDeletingAll ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'} text-white font-black rounded-2xl transition-all shadow-soft uppercase tracking-widest text-xs flex items-center justify-center gap-2`}
+                      >
+                        {isDeletingAll ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        ) : 'Delete All'}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
       </div>
     </Layout>
   );
@@ -1592,6 +1971,12 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('ds_register_lang', lang);
   }, [lang]);
+
+  useEffect(() => {
+    // Clear old test data from local storage to ensure a clean reset
+    const keysToClear = ['ds_register_profile', 'ds_register_history'];
+    keysToClear.forEach(key => localStorage.removeItem(key));
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('ds_register_theme', theme);

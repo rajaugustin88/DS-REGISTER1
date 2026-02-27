@@ -8,6 +8,7 @@
   --color-card: var(--card);
   --color-text: var(--foreground);
   --color-border: var(--border);
+  --color-input: var(--input);
   
   --radius-xl: 0.75rem;
   --radius-2xl: 1.125rem;
@@ -32,7 +33,7 @@
   }
 
   input, textarea, select {
-    @apply !bg-white !text-black border border-border rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-primary transition-all;
+    @apply bg-input text-text border border-border rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-primary transition-all;
   }
 
   input::placeholder, textarea::placeholder {
