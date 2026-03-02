@@ -10,21 +10,22 @@
   --color-border: var(--border);
   --color-input: var(--input);
   
-  --radius-xl: 0.75rem;
+  --radius-xl: 1rem;
   --radius-2xl: 1.125rem;
   
-  --shadow-soft: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-soft: 0 10px 25px rgba(0,0,0,0.05);
 }
 
 :root {
-  --primary: #1ABC9C;
-  --primary-dark: #16A085;
-  --accent: #F4C542;
-  --background: #F5F7FA;
-  --card: #FFFFFF;
-  --foreground: #2C3E50;
-  --border: #E0E0E0;
-  --ring: #1ABC9C;
+  --primary: #2563eb;
+  --primary-dark: #1e40af;
+  --accent: #4f46e5;
+  --background: #f8fafc;
+  --card: #ffffff;
+  --foreground: #0f172a;
+  --border: #e2e8f0;
+  --ring: #2563eb;
+  --input: #f1f5f9;
 }
 
 @layer base {
@@ -33,7 +34,7 @@
   }
 
   input, textarea, select {
-    @apply bg-input text-text border border-border rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-primary transition-all;
+    @apply bg-input text-text border border-border rounded-[12px] px-4 py-2 outline-none focus:ring-2 focus:ring-primary transition-all font-medium;
   }
 
   input::placeholder, textarea::placeholder {
@@ -79,5 +80,5 @@
 }
 
 .teal-gradient {
-  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
 }

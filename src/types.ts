@@ -7,6 +7,16 @@ export interface BusinessProfile {
   address: string;
   gstNumber?: string;
   lastReceiptNumber?: number;
+  plan?: 'free' | 'pro';
+  subscriptionType?: 'monthly' | 'yearly' | null;
+  subscriptionStatus?: 'active' | 'inactive' | 'expired' | 'trial';
+  subscriptionStartDate?: any;
+  expiryDate?: any;
+  trialStartDate?: any;
+  trialEndDate?: any;
+  acceptedTerms?: boolean;
+  acceptedAt?: any;
+  businessDisclaimer?: string;
 }
 
 export interface Transaction {
@@ -23,13 +33,19 @@ export interface Transaction {
   }[];
   subtotal: number;
   tax?: number;
+  gstPercent?: number;
   totalAmount: number;
   amountPaid: number;
   dueAmount: number;
   paymentStatus: 'Paid' | 'Unpaid';
+  serviceType?: string;
+  dlEligibleDate?: any;
+  dlTestCompleted?: boolean;
+  status?: 'cancelled';
+  cancelledAt?: any;
 }
 
-export type ThemeId = 'light' | 'dark';
+export type ThemeId = 'modern' | 'dark-finance' | 'minimal';
 
 export interface Theme {
   id: ThemeId;

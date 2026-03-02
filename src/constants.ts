@@ -266,33 +266,96 @@ export const LANGUAGES = [
 
 export const THEMES: Theme[] = [
   {
-    id: 'light',
-    name: 'Light Mode',
+    id: 'modern',
+    name: 'Compact Modern SaaS',
     colors: {
-      primary: '#1a73e8',
-      secondary: '#f1f3f5',
-      background: '#f8f9fa',
-      foreground: '#212529',
+      primary: '#2563eb',
+      secondary: '#f1f5f9',
+      background: '#f8fafc',
+      foreground: '#0f172a',
       card: '#ffffff',
-      border: '#e9ecef',
-      input: '#f1f3f5',
-      ring: '#1a73e8',
-      accent: '#1a73e8',
+      border: '#e2e8f0',
+      input: '#f1f5f9',
+      ring: '#2563eb',
+      accent: '#4f46e5',
     }
   },
   {
-    id: 'dark',
-    name: 'Dark Mode',
+    id: 'dark-finance',
+    name: 'Dark Finance',
     colors: {
-      primary: '#25D366',
-      secondary: '#121212',
-      background: '#000000',
-      foreground: '#ffffff',
-      card: '#121212',
-      border: '#2a2a2a',
-      input: '#2a2a2a',
-      ring: '#25D366',
-      accent: '#25D366',
+      primary: '#10b981',
+      secondary: '#1e293b',
+      background: '#0f172a',
+      foreground: '#f8fafc',
+      card: '#1e293b',
+      border: '#334155',
+      input: '#334155',
+      ring: '#10b981',
+      accent: '#10b981',
+    }
+  },
+  {
+    id: 'minimal',
+    name: 'Minimal Soft UI',
+    colors: {
+      primary: '#6366f1',
+      secondary: '#f3f4f6',
+      background: '#fafafa',
+      foreground: '#1f2937',
+      card: '#ffffff',
+      border: '#f3f4f6',
+      input: '#f9fafb',
+      ring: '#6366f1',
+      accent: '#6366f1',
     }
   }
 ];
+
+export const TERMS_AND_CONDITIONS = `
+# Terms & Conditions
+
+Welcome to DS-REGISTER. By using our application, you agree to the following terms:
+
+## 1. Acceptance of Terms
+By accessing or using DS-REGISTER, you agree to be bound by these Terms and Conditions and our Privacy Policy.
+
+## 2. Free Trial
+New users are eligible for a 30-day free trial period starting from the date of account creation.
+During the trial period, users may access premium features without payment.
+After the 30-day trial expires, continued access to premium features requires an active paid subscription.
+The trial period is granted once per user account and cannot be reset by deleting data or creating duplicate accounts.
+
+## 3. User Responsibilities
+You are responsible for maintaining the confidentiality of your account and password. You agree to accept responsibility for all activities that occur under your account.
+
+## 4. Data Accuracy
+Users are responsible for the accuracy of the data entered into the system, including business details and transaction records.
+
+## 5. Limitation of Liability
+DS-REGISTER shall not be liable for any indirect, incidental, special, consequential, or punitive damages resulting from your use of the service.
+
+## 6. Modifications to Service
+We reserve the right to modify or discontinue the service at any time without notice.
+`;
+
+export const PRIVACY_POLICY = `
+# Privacy Policy
+
+Your privacy is important to us. This policy explains how we handle your data:
+
+## 1. Data Collection
+We collect information you provide directly to us, such as business name, contact details, and transaction data.
+
+## 2. Data Usage
+We use the collected data to provide, maintain, and improve our services, and to process your transactions.
+
+## 3. Data Security
+We implement reasonable security measures to protect your information from unauthorized access or disclosure.
+
+## 4. Third-Party Services
+We may use third-party services like Firebase for data storage and Razorpay for payment processing. These services have their own privacy policies.
+
+## 5. User Rights
+You have the right to access, update, or delete your personal information at any time through the application settings.
+`;
