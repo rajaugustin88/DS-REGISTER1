@@ -3222,7 +3222,7 @@ export default function App() {
   }, [theme]);
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
       <Routes>
         <Route path="/" element={<LoginPage lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} />} />
         <Route path="/setup" element={
