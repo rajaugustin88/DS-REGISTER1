@@ -4,10 +4,10 @@ import { Layout } from './components/Layout';
 import { LanguageSelector } from './components/LanguageSelector';
 import { THEMES, SLOGANS, TRANSLATIONS, SERVICE_CATEGORIES, LANGUAGES } from './constants';
 import { Language, BusinessProfile, Transaction, ThemeId } from './types';
-import { LogIn, Upload, Plus, Trash2, CheckCircle2, User, History, LogOut, Search, X, ChevronLeft, ChevronRight, Settings, Phone, Globe, Calendar, Clock, ChevronDown, Palette, Crown, ShieldCheck, Zap, AlertTriangle } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { LogIn, Upload, Plus, Trash2, CheckCircle2, User, History, LogOut, Search, X, ChevronLeft, ChevronRight, Settings, Phone, Globe, Calendar, Clock, ChevronDown, Palette, Crown, ShieldCheck, Zap, AlertTriangle, ArrowRight, Smartphone } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { auth, googleProvider } from './lib/firebase';
-import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser, deleteUser, reauthenticateWithPopup } from 'firebase/auth';
+import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser, deleteUser, reauthenticateWithPopup, RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from 'firebase/auth';
 import { getUserProfile, subscribeToUserProfile, saveUserProfile, getUserHistory, subscribeToUserHistory, checkTermsAccepted, acceptTerms, saveTransaction, updateTransactionStatus, cancelTransaction, clearUserHistory, deleteUserAccount } from './lib/dataService';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -589,7 +589,7 @@ function TermsModal({ isOpen, onAccept, onLogout }: {
               <li>You agree to our <Link to="/terms" target="_blank" className="text-primary hover:underline">Terms & Conditions</Link>.</li>
               <li>You acknowledge that this is a digital record management tool.</li>
               <li>You are responsible for the accuracy of all data entered.</li>
-              <li>Subscription terms apply after the 30-day free trial.</li>
+              <li>Subscription terms apply after the 14-day free trial.</li>
             </ul>
           </div>
         </div>
@@ -872,8 +872,12 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
   const navigate = useNavigate();
   const slogan = useMemo(() => SLOGANS[Math.floor(Math.random() * SLOGANS.length)], []);
   const [loading, setLoading] = useState(false);
-
-  // Authentication restricted to Google Sign-In only.
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [otp, setOtp] = useState('');
+  const [showOtpField, setShowOtpField] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const recaptchaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -888,6 +892,61 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
     });
     return () => unsubscribe();
   }, [navigate]);
+
+  const setupRecaptcha = () => {
+    if ((window as any).recaptchaVerifier) return;
+    (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+      'size': 'invisible',
+      'callback': () => {
+        console.log("Recaptcha verified");
+      }
+    });
+  };
+
+  const handlePhoneLogin = async () => {
+    if (!phoneNumber || phoneNumber.length < 10) {
+      alert("Please enter a valid phone number");
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      setupRecaptcha();
+      const appVerifier = (window as any).recaptchaVerifier;
+      const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
+      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
+      setConfirmationResult(confirmation);
+      setShowOtpField(true);
+      alert("OTP sent successfully!");
+    } catch (error: any) {
+      console.error("Phone login failed:", error);
+      alert("Failed to send OTP: " + (error.message || "Unknown error"));
+      if ((window as any).recaptchaVerifier) {
+        (window as any).recaptchaVerifier.clear();
+        (window as any).recaptchaVerifier = null;
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otp || otp.length < 6 || !confirmationResult) {
+      alert("Please enter a valid 6-digit OTP");
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      await confirmationResult.confirm(otp);
+      // Success will be handled by onAuthStateChanged
+    } catch (error: any) {
+      console.error("OTP verification failed:", error);
+      alert("Invalid OTP. Please try again.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
 
   const handleGoogleLogin = async () => {
     if (loading) return;
@@ -915,21 +974,83 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
             <p className="text-sm text-text/40 font-bold uppercase tracking-widest">Digital Billing Solution</p>
           </div>
 
-          <div className="mb-10">
+          <div className="mb-8">
             <h2 className="text-xl font-black text-text tracking-tight uppercase mb-2">Welcome</h2>
             <p className="text-xs text-text/40 font-bold uppercase tracking-widest">Sign in to manage your business</p>
           </div>
           
+          <div className="space-y-4 mb-8">
+            {!showOtpField ? (
+              <div className="space-y-4">
+                <div className="relative">
+                  <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-text/30" />
+                  <input 
+                    type="tel"
+                    placeholder="Enter Phone Number"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                    className="w-full pl-12 pr-4 py-4 bg-input border border-border rounded-2xl outline-none focus:ring-2 focus:ring-primary text-sm font-bold text-text"
+                  />
+                </div>
+                <button
+                  onClick={handlePhoneLogin}
+                  disabled={loading}
+                  className={`w-full py-4 bg-primary text-white font-black rounded-2xl hover:opacity-90 transition-all shadow-lg shadow-primary/20 uppercase tracking-widest text-xs flex items-center justify-center gap-2 ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {loading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'Send OTP'}
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="relative">
+                  <ShieldCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-text/30" />
+                  <input 
+                    type="text"
+                    placeholder="Enter 6-digit OTP"
+                    maxLength={6}
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                    className="w-full pl-12 pr-4 py-4 bg-input border border-border rounded-2xl outline-none focus:ring-2 focus:ring-primary text-sm font-bold text-text tracking-[0.5em] text-center"
+                  />
+                </div>
+                <button
+                  onClick={handleVerifyOtp}
+                  disabled={otpLoading}
+                  className={`w-full py-4 bg-green-600 text-white font-black rounded-2xl hover:bg-green-700 transition-all shadow-lg shadow-green-600/20 uppercase tracking-widest text-xs flex items-center justify-center gap-2 ${otpLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {otpLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'Verify OTP'}
+                </button>
+                <button 
+                  onClick={() => setShowOtpField(false)}
+                  className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest hover:text-primary transition-colors"
+                >
+                  Change Phone Number
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="relative mb-8">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-border"></div>
+            </div>
+            <div className="relative flex justify-center text-[0.6rem] uppercase tracking-widest font-black">
+              <span className="bg-card px-4 text-text/30">Or continue with</span>
+            </div>
+          </div>
+          
           <button
             onClick={handleGoogleLogin}
-            disabled={loading}
-            className={`w-full flex items-center justify-center gap-4 px-6 py-5 bg-input border border-border rounded-2xl hover:bg-background transition-all shadow-sm active:scale-[0.98] group ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={loading || otpLoading}
+            className={`w-full flex items-center justify-center gap-4 px-6 py-4 bg-input border border-border rounded-2xl hover:bg-background transition-all shadow-sm active:scale-[0.98] group ${(loading || otpLoading) ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
             <span className="font-black text-text uppercase tracking-widest text-xs group-hover:text-primary transition-colors">
-              {loading ? 'Connecting...' : 'Continue with Google'}
+              Google
             </span>
           </button>
+
+          <div id="recaptcha-container"></div>
         </div>
         
         <div className="mt-16 text-center max-w-sm px-6">
@@ -1009,6 +1130,13 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
         const profile = await getUserProfile(user.uid);
         if (profile) {
           setFormData(profile);
+        } else {
+          // Pre-fill from Firebase User
+          setFormData(prev => ({
+            ...prev,
+            mobileNumber: user.phoneNumber || '',
+            email: user.email || ''
+          }));
         }
       }
       setLoading(false);
@@ -1317,7 +1445,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
     return () => unsubscribe();
   }, [navigate]);
 
-  // Subscription system migrated from transaction-based free limit to 30-day free trial model.
+  // Subscription system migrated from transaction-based free limit to 14-day free trial model.
   const isTrialExpired = useMemo(() => {
     if (!profile) return false;
     if (profile.plan === 'pro') return false;
@@ -1506,6 +1634,21 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
     >
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-card border border-border p-6 rounded-3xl shadow-soft">
+            <div>
+              <h2 className="text-xl font-black text-text tracking-tight uppercase">New Billing</h2>
+              <p className="text-xs font-bold text-text/40 uppercase tracking-widest">Create a digital receipt for your customer</p>
+            </div>
+            {profile?.plan !== 'pro' && (
+              <button 
+                onClick={() => setIsSubscriptionModalOpen(true)}
+                className="flex items-center justify-center gap-2 px-6 py-3 bg-primary text-white text-[0.7rem] font-black rounded-xl uppercase tracking-widest shadow-lg shadow-primary/20 hover:opacity-90 transition-all active:scale-[0.98]"
+              >
+                <Crown className="w-4 h-4" /> Upgrade to Premium
+              </button>
+            )}
+          </div>
+
           {profile?.subscriptionStatus === 'trial' && profile.trialEndDate && (
             <div className="bg-card border border-border p-4 rounded-2xl shadow-soft flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -1920,26 +2063,29 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
 
     const thisMonthTx = history.filter(tx => {
       const date = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt || Date.now());
-      const isCancelled = tx.status === 'cancelled';
-      return date.getMonth() === currentMonth && date.getFullYear() === currentYear && !isCancelled;
+      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
     });
 
-    const totalTransactions = thisMonthTx.length;
-    const totalRevenue = thisMonthTx
+    const activeTx = thisMonthTx.filter(tx => tx.status !== 'cancelled');
+    const cancelledTx = thisMonthTx.filter(tx => tx.status === 'cancelled');
+
+    const totalTransactions = activeTx.length;
+    const cancelledCount = cancelledTx.length;
+    const totalRevenue = activeTx
       .filter(tx => tx.paymentStatus === 'Paid')
       .reduce((sum, tx) => sum + tx.totalAmount, 0);
-    const totalPending = thisMonthTx.reduce((sum, tx) => sum + (tx.dueAmount || 0), 0);
-    const totalCollected = thisMonthTx.reduce((sum, tx) => sum + (tx.amountPaid || 0), 0);
+    const totalPending = activeTx.reduce((sum, tx) => sum + (tx.dueAmount || 0), 0);
+    const totalCollected = activeTx.reduce((sum, tx) => sum + (tx.amountPaid || 0), 0);
 
     const dlServices = ["MCWG", "MCWOG", "LMV", "HTV"];
-    const dlTestRevenue = thisMonthTx
+    const dlTestRevenue = activeTx
       .filter(tx => tx.paymentStatus === 'Paid' && tx.serviceType && dlServices.includes(tx.serviceType.toUpperCase()))
       .reduce((sum, tx) => sum + tx.totalAmount, 0);
 
-    return { totalTransactions, totalRevenue, totalPending, totalCollected, dlTestRevenue };
+    return { totalTransactions, cancelledCount, totalRevenue, totalPending, totalCollected, dlTestRevenue };
   }, [history]);
 
-  // Updated transaction filters: Unpaid and DL Test (30-day eligibility).
+  // Updated transaction filters: Unpaid and DL Test (14-day eligibility).
   const filteredHistory = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1954,7 +2100,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       if (filterType === 'unpaid') {
         matchesFilter = tx.paymentStatus === 'Unpaid' && tx.status !== 'cancelled';
       } else if (filterType === 'dl-test') {
-        // DL Test Filter Logic: MCWG, MCWOG, LMV, HTV eligible after 30 days and not completed
+        // DL Test Filter Logic: MCWG, MCWOG, LMV, HTV eligible after 14 days and not completed
         const dlServices = ["MCWG", "MCWOG", "LMV", "HTV"];
         const hasDLService = tx.serviceType ? dlServices.includes(tx.serviceType) : tx.services.some(s => dlServices.includes(s.name.toUpperCase()));
         
@@ -1967,7 +2113,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
           } else {
             const createdAt = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt || Date.now());
             eligibleDate = new Date(createdAt);
-            eligibleDate.setDate(eligibleDate.getDate() + 30);
+            eligibleDate.setDate(eligibleDate.getDate() + 14);
           }
           eligibleDate.setHours(0, 0, 0, 0);
           matchesFilter = today >= eligibleDate;
@@ -2271,7 +2417,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
 
                     const diffTime = today.getTime() - tempCreated.getTime();
                     const daysSinceCreated = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                    const daysRemaining = 30 - daysSinceCreated;
+                    const daysRemaining = 14 - daysSinceCreated;
 
                     if (daysRemaining > 0) {
                       return (
@@ -2514,18 +2660,9 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                       <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Due Amount</p>
                     </div>
                     <div className="bg-background/50 p-4 rounded-xl border border-border">
-                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Subscription</p>
-                      <p className="text-lg font-bold text-text uppercase tracking-tight">
-                        {profile?.plan === 'pro' ? (profile?.subscriptionType === 'yearly' ? 'Yearly Pro' : 'Monthly Pro') : 'Free Plan'}
-                      </p>
-                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Current Plan</p>
-                    </div>
-                    <div className={`p-4 rounded-xl border ${isTrialExpired ? 'bg-red-50 border-red-100' : 'bg-background/50 border-border'}`}>
-                      <p className={`text-[0.6rem] font-black uppercase tracking-widest mb-1 ${isTrialExpired ? 'text-red-500' : 'text-text/40'}`}>Trial Status</p>
-                      <p className={`text-lg font-bold tracking-tight ${isTrialExpired ? 'text-red-600' : 'text-text'}`}>
-                        {profile?.plan === 'pro' ? 'Active' : (isTrialExpired ? 'Expired' : `${trialDaysRemaining} Days Left`)}
-                      </p>
-                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Remaining</p>
+                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Cancelled Count</p>
+                      <p className="text-lg font-bold text-red-600">{monthlyStats.cancelledCount}</p>
+                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">This Month</p>
                     </div>
                   </div>
                 </div>
@@ -2665,7 +2802,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
 
                         const diffTime = today.getTime() - tempCreated.getTime();
                         const daysSinceCreated = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                        const daysRemaining = 30 - daysSinceCreated;
+                        const daysRemaining = 14 - daysSinceCreated;
 
                         if (daysRemaining > 0) {
                           return (
@@ -3068,11 +3205,11 @@ function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'deletion'
       sections: [
         {
           heading: "1. Free Trial",
-          text: "We offer a 30-day free trial for new users to explore all features of DS-REGISTER. No credit card is required to start the trial."
+          text: "We offer a 14-day free trial for new users to explore all features of DS-REGISTER. No credit card is required to start the trial."
         },
         {
           heading: "2. Subscription",
-          text: "After the 30-day trial period, a paid subscription is required to continue using the service. Subscription details and pricing are available in the app."
+          text: "After the 14-day trial period, a paid subscription is required to continue using the service. Subscription details and pricing are available in the app."
         },
         {
           heading: "3. User Responsibility",
@@ -3093,7 +3230,7 @@ function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'deletion'
       sections: [
         {
           heading: "1. Non-Refundable Payments",
-          text: "Subscription payments are non-refundable once activated. We provide a 30-day free trial to ensure the service meets your needs before you commit to a paid plan."
+          text: "Subscription payments are non-refundable once activated. We provide a 14-day free trial to ensure the service meets your needs before you commit to a paid plan."
         },
         {
           heading: "2. Cancellation Policy",
