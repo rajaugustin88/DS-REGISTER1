@@ -1,16 +1,75 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { BrowserRouter, Routes, Route, useNavigate, Navigate, Link } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Routes, Route, useNavigate, Navigate, Link } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { LanguageSelector } from './components/LanguageSelector';
 import { THEMES, SLOGANS, TRANSLATIONS, SERVICE_CATEGORIES, LANGUAGES } from './constants';
 import { Language, BusinessProfile, Transaction, ThemeId } from './types';
-import { LogIn, Upload, Plus, Trash2, CheckCircle2, User, History, LogOut, Search, X, ChevronLeft, ChevronRight, Settings, Phone, Globe, Calendar, Clock, ChevronDown, Palette, Crown, ShieldCheck, Zap, AlertTriangle, ArrowRight, Smartphone } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { LogIn, Upload, Plus, Trash2, CheckCircle2, User, History, LogOut, Search, X, ChevronLeft, ChevronRight, Settings, Phone, Globe, Calendar, Clock, ChevronDown, Palette, Crown, ShieldCheck, Zap, AlertTriangle, ArrowRight, Smartphone, Database, FileText, LayoutDashboard, Lock, BookX, Car, Sparkles, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { auth, googleProvider } from './lib/firebase';
-import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser, deleteUser, reauthenticateWithPopup, RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from 'firebase/auth';
-import { getUserProfile, subscribeToUserProfile, saveUserProfile, getUserHistory, subscribeToUserHistory, checkTermsAccepted, acceptTerms, saveTransaction, updateTransactionStatus, cancelTransaction, clearUserHistory, deleteUserAccount } from './lib/dataService';
+import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser, deleteUser, reauthenticateWithPopup } from 'firebase/auth';
+import { getUserProfile, subscribeToUserProfile, saveUserProfile, getUserHistory, subscribeToUserHistory, checkTermsAccepted, acceptTerms, saveTransaction, updateTransactionStatus, cancelTransaction, clearUserHistory, deleteUserAccount, getTransactionsPaginated, searchTransactionsFirestore, getTransactionsByMonth, moveToTrash, getTrashTransactions, recoverFromTrash, permanentlyDeleteTrash, cleanupOldTrash } from './lib/dataService';
+import { QueryDocumentSnapshot } from 'firebase/firestore';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
+
+// --- Error Screen Component ---
+function GlobalErrorScreen({ title, message, onRetry }: { title: string, message: string, onRetry: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-background p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-card border border-border rounded-[2.5rem] p-8 w-full max-w-md shadow-2xl text-center"
+      >
+        <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+          <AlertTriangle className="w-10 h-10 text-red-500" />
+        </div>
+        <h2 className="text-2xl font-black text-text mb-2 uppercase tracking-tight">{title}</h2>
+        <p className="text-text/60 text-sm mb-8 leading-relaxed">{message}</p>
+        <button 
+          onClick={onRetry}
+          className="w-full py-4 bg-primary text-white font-black rounded-2xl hover:opacity-90 transition-all shadow-lg uppercase tracking-widest text-xs flex items-center justify-center gap-2"
+        >
+          <Zap className="w-4 h-4" />
+          Retry Now
+        </button>
+      </motion.div>
+    </div>
+  );
+}
+
+// --- Error Boundary Class ---
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, errorMessage: string }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorMessage: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, errorMessage: error.message };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // Avoid circular structure error by not logging complex React errorInfo if it might be serialized
+    console.error("Uncaught error:", error.message);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <GlobalErrorScreen 
+          title="Something went wrong" 
+          message="Unexpected error occurred. Please refresh the app." 
+          onRetry={() => window.location.reload()} 
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const RAZORPAY_KEY_ID = 'rzp_test_SMJrRto3KMzvNm';
 const MONTHLY_PLAN_ID = 'plan_SMK9ob6sVxNJun';
@@ -139,7 +198,7 @@ function SubscriptionModal({ isOpen, onClose, profile, onUpdate }: {
               <Crown className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-2xl font-black text-text tracking-tight uppercase">Upgrade to Pro</h2>
+              <h2 className="text-2xl font-black tracking-tight uppercase">Upgrade to Pro</h2>
               <p className="text-sm font-bold text-text/40 uppercase tracking-widest">Unlock unlimited transactions & features</p>
             </div>
           </div>
@@ -148,7 +207,7 @@ function SubscriptionModal({ isOpen, onClose, profile, onUpdate }: {
             {/* Monthly Plan */}
             <div className="bg-background border border-border rounded-2xl p-6 flex flex-col hover:border-primary/30 transition-all group">
               <div className="mb-6">
-                <h3 className="text-sm font-black text-text/40 uppercase tracking-widest mb-1">Monthly Plan</h3>
+                <h3 className="text-sm font-black uppercase tracking-widest mb-1">Monthly Plan</h3>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-black text-text">₹199</span>
                   <span className="text-xs font-bold text-text/30 uppercase">/ month</span>
@@ -183,7 +242,7 @@ function SubscriptionModal({ isOpen, onClose, profile, onUpdate }: {
               </div>
               
               <div className="mb-6">
-                <h3 className="text-sm font-black text-primary uppercase tracking-widest mb-1">Yearly Plan</h3>
+                <h3 className="text-sm font-black uppercase tracking-widest mb-1">Yearly Plan</h3>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-black text-text">₹1999</span>
                   <span className="text-xs font-bold text-text/30 uppercase">/ year</span>
@@ -229,221 +288,261 @@ function SubscriptionModal({ isOpen, onClose, profile, onUpdate }: {
 
 // --- Helpers ---
 
-const getBase64ImageFromUrl = async (url: string): Promise<string> => {
-  const res = await fetch(url);
-  const blob = await res.blob();
+const getCircularBase64ImageFromUrl = async (url: string): Promise<string> => {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const size = Math.min(img.width, img.height);
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Could not get canvas context'));
+        return;
+      }
+      
+      // Draw circular clip
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      
+      // Draw image centered and cropped (object-fit: cover equivalent)
+      const offsetX = (img.width - size) / 2;
+      const offsetY = (img.height - size) / 2;
+      ctx.drawImage(img, offsetX, offsetY, size, size, 0, 0, size, size);
+      
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error(`Failed to load image from URL: ${url}`));
+    img.src = url;
   });
+};
+
+const hexToRgb = (hex: string): [number, number, number] => {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return [r, g, b];
 };
 
 const generateReceiptPDF = async (tx: Transaction, profile: BusinessProfile | null, theme: ThemeId) => {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
   const { photoURL } = getUserInfo();
-  const isDark = theme === 'dark-finance';
-
-  // Pick a random slogan
-  const randomSlogan = SLOGANS[Math.floor(Math.random() * SLOGANS.length)];
-
-  // Header Background
-  const headerBg = isDark ? [37, 211, 102] : [232, 240, 254]; // WhatsApp Green vs Google Pay Soft Blue
-  const headerText = isDark ? [255, 255, 255] : [33, 37, 41];
   
-  // Calculate dynamic header height
+  const themeConfig = THEMES.find(t => t.id === theme) || THEMES[0];
+  const primaryRGB = hexToRgb(themeConfig.colors.primary);
+
+  // 1. Header Bar
+  doc.setFillColor(primaryRGB[0], primaryRGB[1], primaryRGB[2]);
+  doc.rect(0, 0, pageWidth, 10, 'F');
+
+  // 2. Title Section
+  doc.setTextColor(primaryRGB[0], primaryRGB[1], primaryRGB[2]);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(28);
+  doc.text('RECEIPT', 15, 30);
+
+  // 3. Company Information (Left Side)
+  doc.setTextColor(0);
+  doc.setFontSize(12);
+  doc.setFont('helvetica', 'bold');
+  let currentY = 42;
+  doc.text(profile?.businessName || 'DS-REGISTER', 15, currentY);
+  
+  doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  const addressLines = doc.splitTextToSize(profile?.address || '', pageWidth - 40);
-  const headerHeight = 65 + (addressLines.length > 1 ? (addressLines.length - 1) * 5 : 0);
+  doc.setTextColor(80);
+  currentY += 6;
+  const addressLines = doc.splitTextToSize(profile?.address || '', 80);
+  addressLines.forEach((line: string) => {
+    doc.text(line, 15, currentY);
+    currentY += 4;
+  });
+  
+  doc.text(`Phone: ${profile?.mobileNumber || ''}`, 15, currentY + 2);
+  doc.text(`Email: ${profile?.email || ''}`, 15, currentY + 6);
+  if (profile?.gstNumber) {
+    doc.text(`GST: ${profile.gstNumber}`, 15, currentY + 10);
+  }
 
-  doc.setFillColor(headerBg[0], headerBg[1], headerBg[2]);
-  doc.rect(0, 0, pageWidth, headerHeight, 'F');
-
-  // Logo
+  // 4. Logo Section (Top-Right)
   if (photoURL) {
     try {
-      const base64 = await getBase64ImageFromUrl(photoURL);
-      doc.addImage(base64, 'JPEG', pageWidth / 2 - 10, 8, 20, 20, undefined, 'FAST');
+      const base64 = await getCircularBase64ImageFromUrl(photoURL);
+      const logoSize = 25;
+      const logoX = pageWidth - 15 - logoSize;
+      const logoY = 15;
+      
+      // Circular container (border)
+      doc.setDrawColor(primaryRGB[0], primaryRGB[1], primaryRGB[2]);
+      doc.setLineWidth(0.5);
+      doc.circle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2, 'S');
+      
+      // Add circular image
+      doc.addImage(base64, 'PNG', logoX + 1, logoY + 1, logoSize - 2, logoSize - 2, undefined, 'FAST');
     } catch (e) {
-      console.error("Failed to load logo for PDF", e);
+      console.error("Failed to load logo for PDF", e instanceof Error ? e.message : String(e));
     }
   }
-  
-  let currentY = photoURL ? 36 : 20;
 
-  // Header Text
-  doc.setTextColor(headerText[0], headerText[1], headerText[2]);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.text(profile?.businessName || 'DS-REGISTER', pageWidth / 2, currentY, { align: 'center' });
-  
-  // Slogan
-  currentY += 8;
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'bold');
-  doc.text(randomSlogan, pageWidth / 2, currentY, { align: 'center' });
-
-  // Address (Wrapped)
-  currentY += 8;
+  // 5. Receipt Details (Right Side under logo)
+  const rightAlignX = pageWidth - 15;
   doc.setFontSize(9);
-  doc.setFont('helvetica', 'normal');
-  addressLines.forEach((line: string) => {
-    doc.text(line, pageWidth / 2, currentY, { align: 'center' });
-    currentY += 5;
-  });
-
-  // Contact Info
-  doc.text(`Mobile: ${profile?.mobileNumber || ''} | Email: ${profile?.email || ''}`, pageWidth / 2, currentY, { align: 'center' });
-  currentY += 5;
-  if (profile?.gstNumber) {
-    doc.text(`GST: ${profile.gstNumber}`, pageWidth / 2, currentY, { align: 'center' });
-    currentY += 5;
-  }
-
-  // Receipt Info
-  const startY = headerHeight + 15;
-  doc.setTextColor(0);
-  doc.setFontSize(14);
   doc.setFont('helvetica', 'bold');
-  doc.text('RECEIPT', 15, startY);
-  
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
   doc.setTextColor(100);
-  doc.text(`Receipt No: ${tx.receiptNumber || tx.id.substring(0, 8)}`, 15, startY + 8);
-  const dateStr = tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleString() : new Date(tx.createdAt || Date.now()).toLocaleString();
-  doc.text(`Date: ${dateStr}`, 15, startY + 14);
+  doc.text('PAYMENT DATE', rightAlignX, 55, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(0);
+  const dateStr = tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleDateString() : new Date(tx.createdAt || Date.now()).toLocaleDateString();
+  doc.text(dateStr, rightAlignX, 60, { align: 'right' });
 
-  // Customer Info
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(100);
+  doc.text('RECEIPT NO.', rightAlignX, 70, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(0);
+  doc.text(tx.receiptNumber || tx.id.substring(0, 8), rightAlignX, 75, { align: 'right' });
+
+  // 6. BILL TO Section
+  currentY = 85;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(primaryRGB[0], primaryRGB[1], primaryRGB[2]);
+  doc.text('BILL TO', 15, currentY);
+  
   doc.setTextColor(0);
   doc.setFontSize(11);
-  doc.setFont('helvetica', 'bold');
-  doc.text('CUSTOMER DETAILS', 15, startY + 28);
-  
-  doc.setFontSize(10);
+  doc.text(tx.customerName, 15, currentY + 7);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Name:`, 15, startY + 36);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`${tx.customerName}`, 45, startY + 36);
-  
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Mobile:`, 15, startY + 42);
-  doc.text(`${tx.customerMobile || '-'}`, 45, startY + 42);
-  
+  doc.setFontSize(9);
+  doc.setTextColor(80);
+  doc.text(tx.customerMobile || '', 15, currentY + 12);
   if (tx.vehicleNumber) {
-    doc.text(`Vehicle No:`, 15, startY + 48);
-    doc.text(`${tx.vehicleNumber}`, 45, startY + 48);
-  }
-  if (tx.remarks) {
-    doc.text(`Remarks:`, 15, startY + 54);
-    doc.text(`${tx.remarks}`, 45, startY + 54);
+    doc.text(`Vehicle: ${tx.vehicleNumber}`, 15, currentY + 17);
   }
 
-  // Services Table
+  // 7. Description Table
   autoTable(doc, {
-    startY: startY + 62,
-    head: [['Service Name', 'Price (INR)']],
-    body: tx.services.map(s => [s.name, s.price.toFixed(2)]),
+    startY: 110,
+    head: [['DESCRIPTION', 'QTY', 'UNIT PRICE', 'TOTAL']],
+    body: tx.services.map(s => [
+      s.name, 
+      '1', 
+      `INR ${s.price.toFixed(2)}`, 
+      `INR ${s.price.toFixed(2)}`
+    ]),
     theme: 'striped',
-    headStyles: { fillColor: isDark ? [37, 211, 102] : [26, 188, 156], textColor: [255, 255, 255] },
-    styles: { fontSize: 10, cellPadding: 4 },
+    headStyles: { 
+      fillColor: primaryRGB, 
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'left'
+    },
+    columnStyles: {
+      0: { halign: 'left' },
+      1: { halign: 'center' },
+      2: { halign: 'right' },
+      3: { halign: 'right' }
+    },
+    styles: { fontSize: 9, cellPadding: 5 },
     margin: { left: 15, right: 15 }
   });
 
-  const finalY = (doc as any).lastAutoTable.finalY + 15;
+  currentY = (doc as any).lastAutoTable.finalY + 15;
 
-  // Totals Section
-  const rightAlignX = pageWidth - 15;
-  const labelX = pageWidth - 75;
+  // 8. Remarks Section
+  if (tx.remarks) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(0);
+    doc.text('Remarks:', 15, currentY);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80);
+    const remarkLines = doc.splitTextToSize(tx.remarks, pageWidth / 2);
+    doc.text(remarkLines, 15, currentY + 5);
+    currentY += 10 + (remarkLines.length * 4);
+  }
+
+  // 9. Traffic Safety Message
+  const messages = [
+    "Follow traffic rules. Your family is waiting for you.",
+    "Do not offer bribes. Report corruption.",
+    "Drive safe. Arrive safe."
+  ];
+  const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+  
+  doc.setFillColor(primaryRGB[0], primaryRGB[1], primaryRGB[2], 0.05);
+  const msgWidth = doc.getTextWidth(randomMessage) + 10;
+  doc.rect(15, currentY, msgWidth, 10, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(primaryRGB[0], primaryRGB[1], primaryRGB[2]);
+  doc.text(randomMessage, 20, currentY + 6.5);
+
+  // 10. Totals Section (Right Side)
+  const totalsLabelX = pageWidth - 80;
+  const totalsValueX = pageWidth - 15;
+  let totalsY = (doc as any).lastAutoTable.finalY + 15;
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100);
   
-  doc.text(`Subtotal:`, labelX, finalY);
+  doc.text('Subtotal', totalsLabelX, totalsY);
   const subtotalVal = tx.subtotal ?? tx.services.reduce((a, b) => a + b.price, 0);
-  doc.text(`INR ${subtotalVal.toFixed(2)}`, rightAlignX, finalY, { align: 'right' });
+  doc.setTextColor(0);
+  doc.text(`INR ${subtotalVal.toFixed(2)}`, totalsValueX, totalsY, { align: 'right' });
 
-  const taxVal = tx.tax ?? (tx.totalAmount - subtotalVal);
-  currentY = finalY;
-  if (taxVal > 0) {
-    currentY += 8;
-    doc.text(`Tax:`, labelX, currentY);
-    doc.text(`INR ${taxVal.toFixed(2)}`, rightAlignX, currentY, { align: 'right' });
+  if (tx.discount && tx.discount > 0) {
+    totalsY += 8;
+    doc.setTextColor(100);
+    doc.text('Discount', totalsLabelX, totalsY);
+    doc.setTextColor(0);
+    doc.text(`- INR ${tx.discount.toFixed(2)}`, totalsValueX, totalsY, { align: 'right' });
   }
 
-  currentY += 12;
+  const taxVal = tx.tax ?? (tx.totalAmount - subtotalVal + (tx.discount || 0));
+  if (taxVal > 0) {
+    totalsY += 8;
+    doc.setTextColor(100);
+    doc.text('Tax', totalsLabelX, totalsY);
+    doc.setTextColor(0);
+    doc.text(`INR ${taxVal.toFixed(2)}`, totalsValueX, totalsY, { align: 'right' });
+  }
+
+  totalsY += 12;
   doc.setFontSize(12);
   doc.setFont('helvetica', 'bold');
-  doc.setTextColor(0);
-  doc.text(`TOTAL AMOUNT:`, labelX, currentY);
-  doc.text(`INR ${tx.totalAmount.toFixed(2)}`, rightAlignX, currentY, { align: 'right' });
+  doc.setTextColor(primaryRGB[0], primaryRGB[1], primaryRGB[2]);
+  doc.text('GRAND TOTAL', totalsLabelX, totalsY);
+  doc.text(`INR ${tx.totalAmount.toFixed(2)}`, totalsValueX, totalsY, { align: 'right' });
 
-  currentY += 10;
+  totalsY += 10;
   doc.setFontSize(10);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(0, 128, 0); // Green for paid
-  doc.text(`Amount Paid:`, labelX, currentY);
-  doc.text(`INR ${(tx.amountPaid || 0).toFixed(2)}`, rightAlignX, currentY, { align: 'right' });
+  doc.setTextColor(0, 128, 0);
+  doc.text('Paid', totalsLabelX, totalsY);
+  doc.text(`INR ${(tx.amountPaid || 0).toFixed(2)}`, totalsValueX, totalsY, { align: 'right' });
 
+  totalsY += 8;
   if (tx.dueAmount > 0) {
-    currentY += 8;
-    doc.setTextColor(255, 0, 0); // Red for due
-    doc.text(`Due Amount:`, labelX, currentY);
-    doc.text(`INR ${tx.dueAmount.toFixed(2)}`, rightAlignX, currentY, { align: 'right' });
-  }
-
-  currentY += 15;
-  if (tx.paymentStatus === 'Unpaid' || tx.dueAmount > 0) {
     doc.setTextColor(255, 0, 0);
   } else {
     doc.setTextColor(0, 128, 0);
   }
-  doc.setFontSize(11);
-  doc.text(`Payment Status: ${tx.paymentStatus.toUpperCase()}`, 15, currentY);
+  doc.text('Remaining Payment', totalsLabelX, totalsY);
+  doc.text(`INR ${tx.dueAmount.toFixed(2)}`, totalsValueX, totalsY, { align: 'right' });
 
-  // Optional business disclaimer section for PDF footer.
-  if (profile?.businessDisclaimer) {
-    currentY += 15;
-    
-    // Check if we need a new page
-    if (currentY + 20 > doc.internal.pageSize.getHeight() - 25) {
-      doc.addPage();
-      currentY = 20;
-    }
-
-    doc.setDrawColor(200);
-    doc.line(15, currentY, pageWidth - 15, currentY);
-    currentY += 10;
-
-    doc.setTextColor(0);
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Business Terms & Disclaimer', 15, currentY);
-    currentY += 6;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(100);
-    const disclaimerLines = doc.splitTextToSize(profile.businessDisclaimer, pageWidth - 30);
-    
-    disclaimerLines.forEach((line: string) => {
-      if (currentY > doc.internal.pageSize.getHeight() - 20) {
-        doc.addPage();
-        currentY = 20;
-      }
-      doc.text(line, 15, currentY);
-      currentY += 5;
-    });
-  }
-
-  // Footer
+  // 11. Footer Bar
+  doc.setFillColor(primaryRGB[0], primaryRGB[1], primaryRGB[2]);
+  doc.rect(0, pageHeight - 10, pageWidth, 10, 'F');
   doc.setFontSize(8);
-  doc.setTextColor(150);
-  doc.setFont('helvetica', 'normal');
-  doc.text('Thank you for your business!', pageWidth / 2, doc.internal.pageSize.getHeight() - 15, { align: 'center' });
+  doc.setTextColor(255, 255, 255);
+  doc.text('Thank you for your business!', pageWidth / 2, pageHeight - 4, { align: 'center' });
 
   doc.save(`Receipt_${tx.customerName.replace(/\s+/g, '_')}_${new Date().getTime()}.pdf`);
 };
@@ -454,24 +553,24 @@ const generateTransactionsPDF = async (history: Transaction[], profile: Business
   const { photoURL } = getUserInfo();
   const isDark = theme === 'dark-finance';
 
+  const themeConfig = THEMES.find(t => t.id === theme) || THEMES[0];
+  const primaryRGB = hexToRgb(themeConfig.colors.primary);
+
   // Header Background
-  const headerBg = isDark ? [37, 211, 102] : [232, 240, 254];
-  const headerText = isDark ? [255, 255, 255] : [33, 37, 41];
-  
-  doc.setFillColor(headerBg[0], headerBg[1], headerBg[2]);
+  doc.setFillColor(primaryRGB[0], primaryRGB[1], primaryRGB[2]);
   doc.rect(0, 0, pageWidth, 55, 'F');
 
   // Logo
   if (photoURL) {
     try {
-      const base64 = await getBase64ImageFromUrl(photoURL);
-      doc.addImage(base64, 'JPEG', pageWidth / 2 - 8, 6, 16, 16, undefined, 'FAST');
+      const base64 = await getCircularBase64ImageFromUrl(photoURL);
+      doc.addImage(base64, 'PNG', pageWidth / 2 - 8, 6, 16, 16, undefined, 'FAST');
     } catch (e) {
-      console.error("Failed to load logo for PDF", e);
+      console.error("Failed to load logo for PDF", e instanceof Error ? e.message : String(e));
     }
   }
   
-  doc.setTextColor(headerText[0], headerText[1], headerText[2]);
+  doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(20);
   doc.text(profile?.businessName || 'DS-REGISTER', pageWidth / 2, photoURL ? 28 : 15, { align: 'center' });
@@ -504,7 +603,7 @@ const generateTransactionsPDF = async (history: Transaction[], profile: Business
     head: [['#', 'Customer', 'Vehicle', 'Services', 'Total', 'Paid', 'Due', 'Status', 'Date']],
     body: tableData,
     theme: 'grid',
-    headStyles: { fillColor: isDark ? [37, 211, 102] : [26, 188, 156], fontSize: 8, textColor: [255, 255, 255] },
+    headStyles: { fillColor: primaryRGB, fontSize: 8, textColor: [255, 255, 255] },
     styles: { fontSize: 7, cellPadding: 3, overflow: 'linebreak' },
     columnStyles: {
       0: { cellWidth: 8 },
@@ -539,13 +638,15 @@ const getUserInfo = () => {
   };
 };
 
-const BusinessLogo = ({ className = "w-12 h-12" }: { className?: string }) => {
+const BusinessLogo = ({ className = "w-12 h-12", logo }: { className?: string, logo?: string | null }) => {
   const { photoURL, initials } = getUserInfo();
+  
+  const displayLogo = logo || photoURL;
   
   return (
     <div className={`${className} rounded-full border-2 border-primary/20 bg-primary/10 flex items-center justify-center overflow-hidden shadow-sm shrink-0`}>
-      {photoURL ? (
-        <img src={photoURL} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+      {displayLogo ? (
+        <img src={displayLogo} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
       ) : (
         <span className="text-primary font-black text-xs">{initials}</span>
       )}
@@ -575,7 +676,7 @@ function TermsModal({ isOpen, onAccept, onLogout }: {
           <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4 text-primary">
             <ShieldCheck className="w-8 h-8" />
           </div>
-          <h2 className="text-2xl font-black text-text tracking-tight uppercase">Accept Terms & Privacy Policy</h2>
+          <h2 className="text-2xl font-black tracking-tight uppercase">Accept Terms & Privacy Policy</h2>
           <p className="text-sm font-bold text-text/40 mt-2 leading-relaxed">
             You must accept our Terms & Conditions and Privacy Policy to continue using the app.
           </p>
@@ -697,7 +798,7 @@ function ProfileDropdown({ profile, onLogout, lang, setLang, currentTheme, setTh
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2 p-0.5 rounded-full hover:bg-white/10 transition-all border border-white/20 bg-white/5"
       >
-        <BusinessLogo className="w-9 h-9" />
+        <BusinessLogo className="w-9 h-9" logo={profile?.logo} />
       </button>
 
       <AnimatePresence>
@@ -872,12 +973,6 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
   const navigate = useNavigate();
   const slogan = useMemo(() => SLOGANS[Math.floor(Math.random() * SLOGANS.length)], []);
   const [loading, setLoading] = useState(false);
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [otp, setOtp] = useState('');
-  const [showOtpField, setShowOtpField] = useState(false);
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [otpLoading, setOtpLoading] = useState(false);
-  const recaptchaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -893,61 +988,6 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
     return () => unsubscribe();
   }, [navigate]);
 
-  const setupRecaptcha = () => {
-    if ((window as any).recaptchaVerifier) return;
-    (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-      'size': 'invisible',
-      'callback': () => {
-        console.log("Recaptcha verified");
-      }
-    });
-  };
-
-  const handlePhoneLogin = async () => {
-    if (!phoneNumber || phoneNumber.length < 10) {
-      alert("Please enter a valid phone number");
-      return;
-    }
-    
-    setLoading(true);
-    try {
-      setupRecaptcha();
-      const appVerifier = (window as any).recaptchaVerifier;
-      const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
-      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
-      setConfirmationResult(confirmation);
-      setShowOtpField(true);
-      alert("OTP sent successfully!");
-    } catch (error: any) {
-      console.error("Phone login failed:", error);
-      alert("Failed to send OTP: " + (error.message || "Unknown error"));
-      if ((window as any).recaptchaVerifier) {
-        (window as any).recaptchaVerifier.clear();
-        (window as any).recaptchaVerifier = null;
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyOtp = async () => {
-    if (!otp || otp.length < 6 || !confirmationResult) {
-      alert("Please enter a valid 6-digit OTP");
-      return;
-    }
-
-    setOtpLoading(true);
-    try {
-      await confirmationResult.confirm(otp);
-      // Success will be handled by onAuthStateChanged
-    } catch (error: any) {
-      console.error("OTP verification failed:", error);
-      alert("Invalid OTP. Please try again.");
-    } finally {
-      setOtpLoading(false);
-    }
-  };
-
   const handleGoogleLogin = async () => {
     if (loading) return;
     setLoading(true);
@@ -956,8 +996,11 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
     } catch (error: any) {
       if (error.code === 'auth/popup-closed-by-user') {
         console.log("User closed the popup");
+      } else if (error.code === 'auth/unauthorized-domain') {
+        console.error("Google login failed: Unauthorized Domain", error instanceof Error ? error.message : String(error));
+        alert("Domain Authorization Required:\n\nPlease add this domain to your Firebase Console (Authentication > Settings > Authorized domains):\n\n" + window.location.hostname);
       } else {
-        console.error("Google login failed:", error);
+        console.error("Google login failed:", error instanceof Error ? error.message : String(error));
         alert("Login failed: " + (error.message || "Unknown error"));
       }
     } finally {
@@ -965,98 +1008,83 @@ function LoginPage({ lang, setLang, theme, setTheme }: {
     }
   };
 
+  const features = [
+    { icon: Database, title: "Secure Storage", desc: "Years of data stored safely with one click" },
+    { icon: FileText, title: "Billing Pro", desc: "Advanced billing and receipt management" },
+    { icon: LayoutDashboard, title: "Smart Dashboard", desc: "User-friendly dashboard for analytics" },
+    { icon: Lock, title: "High Privacy", desc: "High-level privacy and secure authentication" },
+    { icon: Search, title: "Quick Search", desc: "No more searching for customer details" },
+    { icon: BookX, title: "Paperless", desc: "No need for paper registers" },
+    { icon: Globe, title: "Anywhere Access", desc: "Access your data anytime, anywhere" },
+    { icon: Car, title: "Driving Schools", desc: "Designed specifically for driving schools" },
+    { icon: Sparkles, title: "100% Ad-Free Experience", desc: "No distractions, ever" },
+  ];
+
   return (
     <Layout>
-      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-16rem)] py-10">
-        <div className="w-full max-w-md p-8 bg-card border border-border rounded-[2rem] shadow-soft text-center">
-          <div className="mb-10">
-            <h1 className="text-4xl font-black text-text tracking-tighter uppercase mb-2">DS-REGISTER</h1>
-            <p className="text-sm text-text/40 font-bold uppercase tracking-widest">Digital Billing Solution</p>
+      <div className="flex flex-col lg:flex-row items-center justify-center gap-8 lg:gap-12 max-w-6xl mx-auto py-6 sm:py-10 px-4 min-h-[calc(100vh-16rem)]">
+        {/* Left Side: Title & Features */}
+        <div className="w-full lg:w-1/2 space-y-6 sm:space-y-8">
+          <div className="text-center lg:text-left">
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tighter uppercase mb-2 sm:mb-4">DS-REGISTER</h1>
+            <p className="text-base sm:text-lg text-text/40 font-bold uppercase tracking-widest">Digital Billing Solution</p>
           </div>
 
-          <div className="mb-8">
-            <h2 className="text-xl font-black text-text tracking-tight uppercase mb-2">Welcome</h2>
-            <p className="text-xs text-text/40 font-bold uppercase tracking-widest">Sign in to manage your business</p>
-          </div>
-          
-          <div className="space-y-4 mb-8">
-            {!showOtpField ? (
-              <div className="space-y-4">
-                <div className="relative">
-                  <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-text/30" />
-                  <input 
-                    type="tel"
-                    placeholder="Enter Phone Number"
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
-                    className="w-full pl-12 pr-4 py-4 bg-input border border-border rounded-2xl outline-none focus:ring-2 focus:ring-primary text-sm font-bold text-text"
-                  />
+          <div className="bg-card border border-border rounded-[2rem] sm:rounded-[2.5rem] p-5 sm:p-8 shadow-soft">
+            <h2 className="text-xl sm:text-2xl font-black tracking-tight uppercase mb-4 sm:mb-6 text-center lg:text-left">Why Choose DS-Register?</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-6">
+              {features.map((f, i) => (
+                <div key={i} className="flex items-start gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl sm:rounded-2xl hover:bg-primary/5 transition-colors">
+                  <div className="p-2 sm:p-3 bg-primary/10 text-primary rounded-lg sm:rounded-xl shrink-0">
+                    <f.icon className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-black uppercase tracking-tight mb-0.5 sm:mb-1">{f.title}</h3>
+                    <p className="text-[0.65rem] sm:text-xs text-text/50 font-medium leading-relaxed">{f.desc}</p>
+                  </div>
                 </div>
-                <button
-                  onClick={handlePhoneLogin}
-                  disabled={loading}
-                  className={`w-full py-4 bg-primary text-white font-black rounded-2xl hover:opacity-90 transition-all shadow-lg shadow-primary/20 uppercase tracking-widest text-xs flex items-center justify-center gap-2 ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  {loading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'Send OTP'}
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="relative">
-                  <ShieldCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-text/30" />
-                  <input 
-                    type="text"
-                    placeholder="Enter 6-digit OTP"
-                    maxLength={6}
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
-                    className="w-full pl-12 pr-4 py-4 bg-input border border-border rounded-2xl outline-none focus:ring-2 focus:ring-primary text-sm font-bold text-text tracking-[0.5em] text-center"
-                  />
-                </div>
-                <button
-                  onClick={handleVerifyOtp}
-                  disabled={otpLoading}
-                  className={`w-full py-4 bg-green-600 text-white font-black rounded-2xl hover:bg-green-700 transition-all shadow-lg shadow-green-600/20 uppercase tracking-widest text-xs flex items-center justify-center gap-2 ${otpLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  {otpLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'Verify OTP'}
-                </button>
-                <button 
-                  onClick={() => setShowOtpField(false)}
-                  className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest hover:text-primary transition-colors"
-                >
-                  Change Phone Number
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="relative mb-8">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-border"></div>
-            </div>
-            <div className="relative flex justify-center text-[0.6rem] uppercase tracking-widest font-black">
-              <span className="bg-card px-4 text-text/30">Or continue with</span>
+              ))}
             </div>
           </div>
-          
-          <button
-            onClick={handleGoogleLogin}
-            disabled={loading || otpLoading}
-            className={`w-full flex items-center justify-center gap-4 px-6 py-4 bg-input border border-border rounded-2xl hover:bg-background transition-all shadow-sm active:scale-[0.98] group ${(loading || otpLoading) ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
-            <span className="font-black text-text uppercase tracking-widest text-xs group-hover:text-primary transition-colors">
-              Google
-            </span>
-          </button>
-
-          <div id="recaptcha-container"></div>
         </div>
-        
-        <div className="mt-16 text-center max-w-sm px-6">
-          <p className="text-text/40 italic font-medium leading-relaxed">
-            "{slogan}"
-          </p>
+
+        {/* Right Side: Login Form */}
+        <div className="w-full lg:w-1/2 max-w-md">
+          <div className="p-6 sm:p-8 bg-card border border-border rounded-[2rem] sm:rounded-[2.5rem] shadow-soft text-center">
+            <div className="mb-8 sm:mb-12">
+              <h2 className="text-lg sm:text-xl font-black tracking-tight uppercase mb-2">Welcome</h2>
+              <p className="text-[0.65rem] sm:text-xs text-text/40 font-bold uppercase tracking-widest">Sign in with Google to manage your business</p>
+            </div>
+            
+            <div className="flex flex-col items-center justify-center space-y-6">
+              <button
+                onClick={handleGoogleLogin}
+                disabled={loading}
+                className={`w-full flex items-center justify-center gap-4 px-6 py-5 bg-input border border-border rounded-2xl hover:bg-background transition-all shadow-sm active:scale-[0.98] group ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                {loading ? (
+                  <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
+                    <span className="font-black text-text uppercase tracking-widest text-xs group-hover:text-primary transition-colors">
+                      Sign in with Google
+                    </span>
+                  </>
+                )}
+              </button>
+
+              <p className="text-[0.6rem] text-text/30 font-bold uppercase tracking-[0.2em]">
+                Secure • Fast • Reliable
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-8 text-center px-6">
+            <p className="text-text/40 italic font-medium leading-relaxed text-sm">
+              "{slogan}"
+            </p>
+          </div>
         </div>
       </div>
     </Layout>
@@ -1076,8 +1104,21 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   
+  const predefinedLogos = [
+    "/assets/logos/logo1.png",
+    "/assets/logos/logo2.png",
+    "/assets/logos/logo3.png",
+    "/assets/logos/logo4.png",
+    "/assets/logos/logo5.png",
+    "/assets/logos/logo6.png",
+    "/assets/logos/logo7.png",
+    "/assets/logos/logo8.png",
+    "/assets/logos/logo9.png"
+  ];
+
   const [formData, setFormData] = useState<Partial<BusinessProfile>>({
     businessName: '',
+    logo: '',
     mobileNumber: '',
     email: '',
     address: '',
@@ -1115,7 +1156,7 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
       navigate('/');
       alert("Account and all data deleted successfully.");
     } catch (error: any) {
-      console.error("Account deletion failed:", error);
+      console.error("Account deletion failed:", error instanceof Error ? error.message : String(error));
       alert("Failed to delete account: " + (error.message || "Please try again."));
     } finally {
       setIsDeleting(false);
@@ -1178,6 +1219,7 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
     try {
       const finalData: BusinessProfile = {
         businessName: formData.businessName!.trim(),
+        logo: formData.logo || '',
         mobileNumber: formData.mobileNumber!.trim(),
         email: formData.email?.trim() || '',
         address: formData.address!.trim(),
@@ -1188,7 +1230,7 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
       await saveUserProfile(user.uid, finalData);
       navigate('/billing');
     } catch (error: any) {
-      console.error("Failed to save profile:", error);
+      console.error("Failed to save profile:", error instanceof Error ? error.message : String(error));
       alert("Failed to save profile: " + (error.message || "Please try again."));
       setSaving(false); // Re-enable button on error
     }
@@ -1206,15 +1248,17 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
     <Layout>
       <div className="max-w-2xl mx-auto">
         <div className="mb-10">
-          <h2 className="text-2xl font-bold text-text tracking-tight uppercase">{t.setupTitle}</h2>
+          <h2 className="text-2xl font-bold tracking-tight uppercase">{t.setupTitle}</h2>
           <p className="text-sm text-text/40 font-medium mt-1">Complete your business profile to get started</p>
         </div>
         
         <div className="flex items-center gap-6 mb-10 bg-card p-5 rounded-2xl border border-border shadow-soft">
-          <BusinessLogo className="w-16 h-16" />
+          <BusinessLogo className="w-16 h-16" logo={formData.logo} />
           <div>
-            <h3 className="text-base font-bold text-text tracking-tight uppercase">Business Identity</h3>
-            <p className="text-xs text-text/50 font-medium">Using your Google profile photo as business logo</p>
+            <h3 className="text-base font-bold tracking-tight uppercase">Business Identity</h3>
+            <p className="text-xs text-text/50 font-medium">
+              {formData.logo ? 'Using selected business logo' : 'Using your Google profile photo as business logo'}
+            </p>
           </div>
         </div>
         
@@ -1232,6 +1276,7 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
                 />
                 {errors.businessName && <p className="text-red-500 text-[0.625rem] font-medium uppercase tracking-tight">{errors.businessName}</p>}
               </div>
+
               <div className="space-y-1.5">
                 <label className="text-[0.65rem] font-medium text-text/50 uppercase tracking-widest">{t.mobileNumber}</label>
                 <input
@@ -1243,6 +1288,35 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
                   placeholder="Enter mobile number"
                 />
                 {errors.mobileNumber && <p className="text-red-500 text-[0.625rem] font-medium uppercase tracking-tight">{errors.mobileNumber}</p>}
+              </div>
+
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-[0.65rem] font-medium text-text/50 uppercase tracking-widest">Select Business Logo (Optional)</label>
+                <div className="relative">
+                  <select
+                    name="logo"
+                    value={formData.logo || ''}
+                    onChange={(e) => setFormData(prev => ({ ...prev, logo: e.target.value }))}
+                    className="w-full pl-12 pr-4 py-2.5 bg-input border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-medium text-text appearance-none"
+                  >
+                    <option value="">Default (Google Photo)</option>
+                    {predefinedLogos.map((logo, idx) => (
+                      <option key={idx} value={logo}>Logo {idx + 1}</option>
+                    ))}
+                  </select>
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                    {formData.logo ? (
+                      <img src={formData.logo} alt="Selected" className="w-6 h-6 rounded-full object-cover border border-border" />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center border border-border">
+                        <User className="w-3 h-3 text-primary" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <ChevronDown className="w-4 h-4 text-text/30" />
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1316,7 +1390,7 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
 
           {/* Added full account deletion system for Play Store compliance. */}
           <div className="mt-12 pt-8 border-t border-border">
-            <h3 className="text-sm font-black text-red-600 uppercase tracking-widest mb-2">Danger Zone</h3>
+            <h3 className="text-sm font-black uppercase tracking-widest mb-2">Danger Zone</h3>
             <p className="text-xs text-text/40 font-medium mb-6">Permanently delete your account and all associated data. This action is irreversible.</p>
             <button
               type="button"
@@ -1341,7 +1415,7 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
                   <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
                     <AlertTriangle className="w-8 h-8 text-red-600" />
                   </div>
-                  <h3 className="text-xl font-black text-text tracking-tight uppercase mb-2">Are you sure?</h3>
+                  <h3 className="text-xl font-black tracking-tight uppercase mb-2">Are you sure?</h3>
                   <p className="text-sm font-bold text-text/40 mb-8">
                     This will permanently delete your account and all data. 
                     <br />
@@ -1399,6 +1473,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedServices, setSelectedServices] = useState<{ name: string, price: number }[]>([]);
   const [gstPercent, setGstPercent] = useState<number | ''>('');
+  const [discount, setDiscount] = useState<number | ''>('');
   const [amountPaid, setAmountPaid] = useState<number | ''>('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
@@ -1485,7 +1560,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
 
   const subtotal = selectedServices.reduce((sum, s) => sum + s.price, 0);
   const gstAmount = gstPercent ? (subtotal * (gstPercent / 100)) : 0;
-  const total = subtotal + gstAmount;
+  const total = subtotal + gstAmount - (Number(discount) || 0);
 
   const handleAddService = (name: string) => {
     if (!selectedServices.find(s => s.name === name)) {
@@ -1511,7 +1586,10 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
       services: selectedServices,
       subtotal: subtotal,
       tax: gstAmount,
+      discount: Number(discount) || 0,
       totalAmount: total,
+      amountPaid: Number(amountPaid) || 0,
+      dueAmount: total - (Number(amountPaid) || 0),
       paymentStatus: 'Unpaid'
     };
     await generateReceiptPDF(currentTx, profile, theme);
@@ -1559,6 +1637,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
         services: selectedServices,
         subtotal: subtotal,
         tax: gstAmount,
+        discount: Number(discount) || 0,
         totalAmount: total,
         amountPaid: paid,
         dueAmount: due,
@@ -1583,7 +1662,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
       alert("Transaction saved successfully!");
       navigate('/history');
     } catch (error) {
-      console.error("Error saving transaction:", error);
+      console.error("Error saving transaction:", error instanceof Error ? error.message : String(error));
       alert("Failed to save transaction. Please try again.");
     } finally {
       setSaving(false);
@@ -1595,7 +1674,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
       await signOut(auth);
       navigate('/');
     } catch (error) {
-      console.error("Logout failed:", error);
+      console.error("Logout failed:", error instanceof Error ? error.message : String(error));
       navigate('/');
     }
   };
@@ -1625,7 +1704,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
               <h1 className="text-base font-bold text-white tracking-tight leading-none">{profile?.businessName || 'DS-REGISTER'}</h1>
               {profile?.plan === 'pro' && <Crown className="w-3.5 h-3.5 text-yellow-400 fill-yellow-400" />}
             </div>
-            <p className="text-[0.6rem] font-medium text-white/70 uppercase tracking-wider mt-0.5">
+            <p className="text-[0.6rem] font-medium text-white uppercase tracking-wider mt-0.5">
               {profile?.plan === 'pro' ? 'Pro Plan • Unlimited' : (isTrialExpired ? 'Trial Expired' : `Free Trial • ${trialDaysRemaining} Days Left`)}
             </p>
           </div>
@@ -1636,7 +1715,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
         <div className="lg:col-span-2 space-y-8">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-card border border-border p-6 rounded-3xl shadow-soft">
             <div>
-              <h2 className="text-xl font-black text-text tracking-tight uppercase">New Billing</h2>
+              <h2 className="text-xl font-black tracking-tight uppercase">New Billing</h2>
               <p className="text-xs font-bold text-text/40 uppercase tracking-widest">Create a digital receipt for your customer</p>
             </div>
             {profile?.plan !== 'pro' && (
@@ -1685,7 +1764,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
                 {isExpired ? <Clock className="w-8 h-8" /> : <Zap className="w-8 h-8" />}
               </div>
               <div className="space-y-2">
-                <h3 className="text-xl font-black text-text tracking-tighter uppercase">
+                <h3 className="text-xl font-black tracking-tighter uppercase">
                   {isExpired ? 'Subscription Expired' : 'Trial Expired'}
                 </h3>
                 <p className="text-sm font-bold text-text/40 max-w-sm mx-auto">
@@ -1708,7 +1787,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
           {/* Customer Section */}
           <section className="bg-card p-5 rounded-2xl border border-border shadow-soft">
             <div className="mb-6">
-              <h3 className="text-sm font-bold text-text uppercase tracking-widest flex items-center gap-2">
+              <h3 className="text-sm font-bold uppercase tracking-widest flex items-center gap-2">
                 <div className="w-1 h-4 bg-primary rounded-full"></div>
                 {t.customerDetails}
               </h3>
@@ -1759,7 +1838,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
           {/* Services Section */}
           <section className="bg-card p-5 rounded-2xl border border-border shadow-soft">
             <div className="mb-6">
-              <h3 className="text-sm font-bold text-text uppercase tracking-widest flex items-center gap-2">
+              <h3 className="text-sm font-bold uppercase tracking-widest flex items-center gap-2">
                 <div className="w-1 h-4 bg-primary rounded-full"></div>
                 {t.serviceNeeds}
               </h3>
@@ -1822,7 +1901,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
 
             {selectedServices.length > 0 && (
               <div className="space-y-6">
-                <h4 className="text-[0.625rem] font-black text-text/40 uppercase tracking-widest">{t.selectedServices}</h4>
+                <h4 className="text-[0.625rem] font-black uppercase tracking-widest">{t.selectedServices}</h4>
                 <div className="space-y-4">
                   {selectedServices.map(s => (
                     <div key={s.name} className="flex items-center gap-6 p-5 bg-input rounded-2xl border border-border group hover:border-primary/30 transition-all">
@@ -1861,7 +1940,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
             <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 rounded-full -mr-16 -mt-16 blur-3xl"></div>
             
             <div className="bg-primary/10 px-5 py-2 rounded-xl inline-block mb-8 border border-primary/20 relative z-10">
-              <h3 className="text-[0.625rem] font-black text-primary uppercase tracking-widest">Calculation</h3>
+              <h3 className="text-[0.625rem] font-black uppercase tracking-widest">Calculation</h3>
             </div>
             
             <div className="space-y-6 relative z-10">
@@ -1870,6 +1949,20 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
                 <span className="text-lg font-black text-text">₹{subtotal.toFixed(2)}</span>
               </div>
               
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-bold text-text/50">Discount</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-text/30">₹</span>
+                  <input
+                    type="number"
+                    value={discount}
+                    onChange={e => setDiscount(e.target.value === '' ? '' : Number(e.target.value))}
+                    disabled={isReadOnly}
+                    className={`w-24 bg-input border border-border rounded-xl px-3 py-2 text-right text-sm font-black outline-none focus:border-primary transition-all text-text ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  />
+                </div>
+              </div>
+
               <div className="flex justify-between items-center">
                 <span className="text-sm font-bold text-text/50">{t.gstPercent}</span>
                 <div className="flex items-center gap-2">
@@ -1944,6 +2037,207 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
 }
 
 // --- Page 4: History ---
+// --- Trash Page Component ---
+function TrashPage({ 
+  lang 
+}: { 
+  lang: Language 
+}) {
+  const navigate = useNavigate();
+  const [trash, setTrash] = useState<Transaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const t = TRANSLATIONS[lang];
+
+  const loadTrash = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+    setLoading(true);
+    try {
+      await cleanupOldTrash(user.uid);
+      const data = await getTrashTransactions(user.uid);
+      setTrash(data);
+    } catch (error) {
+      console.error("Failed to load trash:", error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTrash();
+  }, []);
+
+  const handleToggleSelect = (id: string) => {
+    setSelectedIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.length === trash.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(trash.map(tx => tx.id));
+    }
+  };
+
+  const handleRecover = async () => {
+    if (selectedIds.length === 0) return;
+    const user = auth.currentUser;
+    if (!user) return;
+
+    setIsRecovering(true);
+    try {
+      await recoverFromTrash(user.uid, selectedIds);
+      setTrash(prev => prev.filter(tx => !selectedIds.includes(tx.id)));
+      setSelectedIds([]);
+      alert("Transactions recovered successfully.");
+    } catch (error) {
+      console.error("Failed to recover:", error instanceof Error ? error.message : String(error));
+      alert("Failed to recover transactions.");
+    } finally {
+      setIsRecovering(false);
+    }
+  };
+
+  const handleClearTrash = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    setIsClearing(true);
+    try {
+      await permanentlyDeleteTrash(user.uid);
+      setTrash([]);
+      setSelectedIds([]);
+      setShowClearConfirm(false);
+      alert("Trash cleared successfully.");
+    } catch (error) {
+      console.error("Failed to clear trash:", error instanceof Error ? error.message : String(error));
+      alert("Failed to clear trash.");
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[150] bg-background flex flex-col">
+      <div className="bg-primary px-6 py-4 flex items-center gap-4 shadow-lg">
+        <button onClick={() => navigate(-1)} className="p-2 hover:bg-white/10 rounded-xl transition-all text-white">
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+        <h2 className="text-lg font-black uppercase tracking-widest text-white">Trash</h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={handleSelectAll}
+                className="px-4 py-2 bg-card border border-border rounded-xl text-[0.65rem] font-black uppercase tracking-widest hover:bg-primary/5 transition-all"
+              >
+                {selectedIds.length === trash.length && trash.length > 0 ? 'Deselect All' : 'Select All'}
+              </button>
+              {selectedIds.length > 0 && (
+                <button 
+                  onClick={handleRecover}
+                  disabled={isRecovering}
+                  className="px-4 py-2 bg-green-600 text-white rounded-xl text-[0.65rem] font-black uppercase tracking-widest hover:bg-green-700 transition-all flex items-center gap-2"
+                >
+                  {isRecovering ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                  Recover ({selectedIds.length})
+                </button>
+              )}
+            </div>
+            <button 
+              onClick={() => setShowClearConfirm(true)}
+              disabled={trash.length === 0 || isClearing}
+              className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl text-[0.65rem] font-black uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all flex items-center gap-2 disabled:opacity-50"
+            >
+              <Trash2 className="w-3 h-3" /> Clear Trash
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="flex justify-center py-24">
+              <Loader2 className="w-10 h-10 text-primary animate-spin" />
+            </div>
+          ) : trash.length === 0 ? (
+            <div className="text-center py-24 bg-card rounded-[2rem] border-2 border-dashed border-border flex flex-col items-center justify-center">
+              <Trash2 className="w-12 h-12 text-text/10 mb-4" />
+              <p className="text-sm font-black text-text/30 uppercase tracking-widest">Trash is empty</p>
+              <p className="text-[0.6rem] font-bold text-text/20 mt-2 uppercase">Items stay here for 14 days before permanent deletion</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {trash.map(tx => (
+                <div 
+                  key={tx.id}
+                  onClick={() => handleToggleSelect(tx.id)}
+                  className={`p-5 bg-card border rounded-2xl transition-all cursor-pointer flex items-center gap-4 ${selectedIds.includes(tx.id) ? 'border-primary ring-1 ring-primary' : 'border-border hover:border-primary/30'}`}
+                >
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${selectedIds.includes(tx.id) ? 'bg-primary border-primary' : 'border-border'}`}>
+                    {selectedIds.includes(tx.id) && <CheckCircle2 className="w-3 h-3 text-white" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-start mb-1">
+                      <h4 className="font-black text-sm uppercase truncate">{tx.customerName || tx.customerMobile}</h4>
+                      <span className="text-sm font-black">₹{tx.totalAmount.toFixed(2)}</span>
+                    </div>
+                    <p className="text-[0.65rem] font-bold text-text/50 uppercase tracking-widest mb-2">{tx.services.map(s => s.name).join(', ')}</p>
+                    <div className="flex items-center gap-2 text-[0.6rem] font-black text-text/30 uppercase tracking-widest">
+                      <Calendar className="w-3 h-3" />
+                      Deleted on: {tx.deletedAt?.toDate ? tx.deletedAt.toDate().toLocaleDateString() : new Date(tx.deletedAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {showClearConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-card border border-border rounded-[2rem] p-8 w-full max-w-md shadow-2xl"
+            >
+              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 mx-auto">
+                <AlertTriangle className="w-8 h-8 text-red-600" />
+              </div>
+              <h3 className="text-xl font-black text-center mb-4 uppercase tracking-tight">Clear Trash?</h3>
+              <p className="text-sm text-text/60 text-center mb-8 font-medium">Are you sure you want to permanently delete all trash items? This action cannot be undone.</p>
+              <div className="grid grid-cols-2 gap-4">
+                <button 
+                  onClick={() => setShowClearConfirm(false)}
+                  className="py-4 bg-background border border-border text-text font-black rounded-2xl hover:bg-border transition-all uppercase tracking-widest text-xs"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleClearTrash}
+                  disabled={isClearing}
+                  className="py-4 bg-red-600 text-white font-black rounded-2xl hover:bg-red-700 transition-all shadow-soft uppercase tracking-widest text-xs flex items-center justify-center gap-2"
+                >
+                  {isClearing ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Yes, Clear All'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function HistoryPage({ lang, setLang, theme, setTheme }: { 
   lang: Language, 
   setLang: (l: Language) => void,
@@ -1958,7 +2252,10 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
   const [filterType, setFilterType] = useState<'all' | 'unpaid' | 'dl-test' | 'cancelled'>('all');
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isDownloadAllOpen, setIsDownloadAllOpen] = useState(false);
+  const [isDownloadMonthlyOpen, setIsDownloadMonthlyOpen] = useState(false);
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
+  const [selectedFormat, setSelectedFormat] = useState<'pdf' | 'xlsx' | 'csv'>('pdf');
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(true);
@@ -1978,6 +2275,50 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const [statsHistory, setStatsHistory] = useState<Transaction[]>([]);
+
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+
+  const observer = useRef<IntersectionObserver | null>(null);
+  const lastElementRef = useCallback((node: HTMLDivElement) => {
+    if (loading || isFetchingMore) return;
+    if (observer.current) observer.current.disconnect();
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore && !searchQuery) {
+        loadMore();
+      }
+    });
+    if (node) observer.current.observe(node);
+  }, [loading, isFetchingMore, hasMore, searchQuery]);
+
+  const loadMore = async () => {
+    if (isFetchingMore || !hasMore || searchQuery) return;
+    
+    const user = auth.currentUser;
+    if (!user) return;
+
+    setIsFetchingMore(true);
+    try {
+      const { transactions, lastDoc: last } = await getTransactionsPaginated(user.uid, lastDoc);
+      if (transactions.length > 0) {
+        setHistory(prev => [...prev, ...transactions]);
+        setLastDoc(last);
+        setHasMore(transactions.length === 20);
+      } else {
+        setHasMore(false);
+      }
+    } catch (error) {
+      console.error("Error loading more transactions:", error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsFetchingMore(false);
+    }
+  };
 
   useEffect(() => {
     const user = auth.currentUser;
@@ -2017,16 +2358,63 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       }
     });
 
-    const unsubscribeHistory = subscribeToUserHistory(user.uid, (h) => {
-      setHistory(h);
-      setLoading(false);
-    });
-
     return () => {
       unsubscribeProfile();
-      unsubscribeHistory();
     };
   }, [navigate]);
+
+  // Initial load and search reset
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    const loadInitial = async () => {
+      if (searchQuery) return; // Handled by search effect
+      
+      setLoading(true);
+      try {
+        const { transactions, lastDoc: last } = await getTransactionsPaginated(user.uid, null);
+        setHistory(transactions);
+        setLastDoc(last);
+        setHasMore(transactions.length === 20);
+        
+        // Load stats data for current month
+        const now = new Date();
+        const stats = await getTransactionsByMonth(user.uid, now.getMonth(), now.getFullYear());
+        setStatsHistory(stats);
+      } catch (error) {
+        console.error("Error loading initial transactions:", error instanceof Error ? error.message : String(error));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadInitial();
+  }, [searchQuery === '']);
+
+  // Search logic
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user || !searchQuery) {
+      setIsSearching(false);
+      return;
+    }
+
+    const performSearch = async () => {
+      setIsSearching(true);
+      try {
+        const results = await searchTransactionsFirestore(user.uid, searchQuery);
+        setHistory(results);
+      } catch (error) {
+        console.error("Search error:", error instanceof Error ? error.message : String(error));
+      } finally {
+        setIsSearching(false);
+      }
+    };
+
+    const timer = setTimeout(performSearch, 400);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const isExpired = useMemo(() => {
     return profile?.subscriptionStatus === 'expired';
@@ -2057,17 +2445,8 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
   // Developer load testing tool removed after testing.
 
   const monthlyStats = useMemo(() => {
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
-
-    const thisMonthTx = history.filter(tx => {
-      const date = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt || Date.now());
-      return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
-    });
-
-    const activeTx = thisMonthTx.filter(tx => tx.status !== 'cancelled');
-    const cancelledTx = thisMonthTx.filter(tx => tx.status === 'cancelled');
+    const activeTx = statsHistory.filter(tx => tx.status !== 'cancelled');
+    const cancelledTx = statsHistory.filter(tx => tx.status === 'cancelled');
 
     const totalTransactions = activeTx.length;
     const cancelledCount = cancelledTx.length;
@@ -2082,10 +2461,28 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       .filter(tx => tx.paymentStatus === 'Paid' && tx.serviceType && dlServices.includes(tx.serviceType.toUpperCase()))
       .reduce((sum, tx) => sum + tx.totalAmount, 0);
 
-    return { totalTransactions, cancelledCount, totalRevenue, totalPending, totalCollected, dlTestRevenue };
-  }, [history]);
+    const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+    const chartData = Array.from({ length: daysInMonth }, (_, i) => ({
+      day: i + 1,
+      revenue: 0,
+      collected: 0
+    }));
 
-  // Updated transaction filters: Unpaid and DL Test (14-day eligibility).
+    activeTx.forEach(tx => {
+      const date = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt || Date.now());
+      const day = date.getDate();
+      if (day <= daysInMonth) {
+        if (tx.paymentStatus === 'Paid') {
+          chartData[day - 1].revenue += tx.totalAmount;
+        }
+        chartData[day - 1].collected += (tx.amountPaid || 0);
+      }
+    });
+
+    return { totalTransactions, cancelledCount, totalRevenue, totalPending, totalCollected, dlTestRevenue, chartData };
+  }, [statsHistory]);
+
+  // Updated transaction filters: Unpaid and DL Test (30-day eligibility).
   const filteredHistory = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -2100,7 +2497,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       if (filterType === 'unpaid') {
         matchesFilter = tx.paymentStatus === 'Unpaid' && tx.status !== 'cancelled';
       } else if (filterType === 'dl-test') {
-        // DL Test Filter Logic: MCWG, MCWOG, LMV, HTV eligible after 14 days and not completed
+        // DL Test Filter Logic: MCWG, MCWOG, LMV, HTV eligible after 30 days and not completed
         const dlServices = ["MCWG", "MCWOG", "LMV", "HTV"];
         const hasDLService = tx.serviceType ? dlServices.includes(tx.serviceType) : tx.services.some(s => dlServices.includes(s.name.toUpperCase()));
         
@@ -2113,7 +2510,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
           } else {
             const createdAt = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt || Date.now());
             eligibleDate = new Date(createdAt);
-            eligibleDate.setDate(eligibleDate.getDate() + 14);
+            eligibleDate.setDate(eligibleDate.getDate() + 30);
           }
           eligibleDate.setHours(0, 0, 0, 0);
           matchesFilter = today >= eligibleDate;
@@ -2152,7 +2549,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       await signOut(auth);
       navigate('/');
     } catch (error) {
-      console.error("Logout failed:", error);
+      console.error("Logout failed:", error instanceof Error ? error.message : String(error));
       navigate('/');
     }
   };
@@ -2179,49 +2576,95 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       setIsClearAllModalOpen(false);
       alert("All transactions deleted successfully.");
     } catch (error) {
-      console.error("Failed to clear history:", error);
+      console.error("Failed to clear history:", error instanceof Error ? error.message : String(error));
       setDeleteError("Failed to delete transactions. Please try again.");
     } finally {
       setIsDeletingAll(false);
     }
   };
 
-  const handleDownloadAll = async () => {
-    if (history.length === 0) {
-      alert("No transactions to download.");
-      return;
+  const handleExport = async (data: Transaction[], format: 'pdf' | 'xlsx' | 'csv', title: string, filename: string) => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    try {
+      if (data.length === 0) {
+        alert("No transactions to download.");
+        return;
+      }
+
+      if (format === 'pdf') {
+        await generateTransactionsPDF(data, profile, title, `${filename}.pdf`, theme);
+      } else {
+        const worksheetData = data.map((tx, index) => ({
+          '#': index + 1,
+          'Customer Name': tx.customerName,
+          'Mobile': tx.customerMobile || '-',
+          'Vehicle/DL No': tx.vehicleNumber || '-',
+          'Services': tx.services.map(s => s.name).join(', '),
+          'Total Amount': tx.totalAmount,
+          'Amount Paid': tx.amountPaid || 0,
+          'Due Amount': tx.dueAmount || 0,
+          'Status': tx.paymentStatus,
+          'Date': tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleDateString('en-IN') : new Date(tx.createdAt || Date.now()).toLocaleDateString('en-IN')
+        }));
+
+        const worksheet = XLSX.utils.json_to_sheet(worksheetData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Transactions');
+
+        if (format === 'xlsx') {
+          XLSX.writeFile(workbook, `${filename}.xlsx`);
+        } else if (format === 'csv') {
+          XLSX.writeFile(workbook, `${filename}.csv`, { bookType: 'csv' });
+        }
+      }
+      setIsSettingsOpen(false);
+      setIsDownloadAllOpen(false);
+      setIsDownloadMonthlyOpen(false);
+      setIsMonthPickerOpen(false);
+    } catch (error) {
+      console.error("Export error:", error instanceof Error ? error.message : String(error));
+      alert("Failed to export report.");
     }
-    await generateTransactionsPDF(
-      history, 
-      profile, 
-      'ALL TRANSACTIONS REPORT', 
-      `All_Transactions_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`,
-      theme
-    );
-    setIsSettingsOpen(false);
   };
 
-  const handleDownloadMonthly = async () => {
-    const monthName = new Intl.DateTimeFormat('en-US', { month: 'long' }).format(new Date(selectedYear, selectedMonth));
-    const monthlyHistory = history.filter(tx => {
-      const date = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt || Date.now());
-      return date.getMonth() === selectedMonth && date.getFullYear() === selectedYear;
-    });
+  const handleDownloadAll = async (format: 'pdf' | 'xlsx' | 'csv') => {
+    const user = auth.currentUser;
+    if (!user) return;
 
-    if (monthlyHistory.length === 0) {
-      alert(t.noTransactionsMonth);
-      return;
+    try {
+      const allHistory = await getUserHistory(user.uid);
+      await handleExport(
+        allHistory, 
+        format,
+        'ALL TRANSACTIONS REPORT', 
+        `DS-REGISTER_All_Transactions`
+      );
+    } catch (error) {
+      console.error("Download error:", error instanceof Error ? error.message : String(error));
+      alert("Failed to download report.");
     }
+  };
 
-    await generateTransactionsPDF(
-      monthlyHistory, 
-      profile, 
-      `${monthName.toUpperCase()} ${selectedYear} TRANSACTIONS`, 
-      `Transactions_${monthName}_${selectedYear}.pdf`,
-      theme
-    );
-    setIsMonthPickerOpen(false);
-    setIsSettingsOpen(false);
+  const handleDownloadMonthly = async (format: 'pdf' | 'xlsx' | 'csv') => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    try {
+      const monthName = new Intl.DateTimeFormat('en-US', { month: 'long' }).format(new Date(selectedYear, selectedMonth));
+      const monthlyHistory = await getTransactionsByMonth(user.uid, selectedMonth, selectedYear);
+
+      await handleExport(
+        monthlyHistory, 
+        format,
+        `${monthName.toUpperCase()} ${selectedYear} TRANSACTIONS`, 
+        `DS-REGISTER_${monthName}_${selectedYear}_Transactions`
+      );
+    } catch (error) {
+      console.error("Monthly download error:", error instanceof Error ? error.message : String(error));
+      alert("Failed to download monthly report.");
+    }
   };
 
   const handleUpdatePayment = async () => {
@@ -2269,7 +2712,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       setAdditionalAmount('');
       alert("Payment updated successfully");
     } catch (error) {
-      console.error("Failed to update payment:", error);
+      console.error("Failed to update payment:", error instanceof Error ? error.message : String(error));
       setPaymentError("Failed to update payment. Please try again.");
     } finally {
       setIsUpdatingPayment(false);
@@ -2298,7 +2741,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       setHistory(updatedHistory);
       alert("Test marked as completed.");
     } catch (error) {
-      console.error("Failed to update test status:", error);
+      console.error("Failed to update test status:", error instanceof Error ? error.message : String(error));
       alert("Failed to update test status.");
     }
   };
@@ -2334,10 +2777,32 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       setSelectedTransactionId(null);
       alert("Transaction cancelled successfully.");
     } catch (error) {
-      console.error("Failed to cancel transaction:", error);
+      console.error("Failed to cancel transaction:", error instanceof Error ? error.message : String(error));
       alert("Failed to cancel transaction. Please try again.");
     } finally {
       setIsCancelling(false);
+    }
+  };
+
+  const handleDeleteTransaction = async () => {
+    const user = auth.currentUser;
+    if (!user || !selectedTransactionId) return;
+
+    setIsDeleting(true);
+    try {
+      await moveToTrash(user.uid, selectedTransactionId);
+      setHistory(prev => prev.filter(tx => tx.id !== selectedTransactionId));
+      if (selectedTx?.id === selectedTransactionId) {
+        setSelectedTx(null);
+      }
+      setShowDeleteConfirm(false);
+      setSelectedTransactionId(null);
+      alert("Transaction moved to Trash.");
+    } catch (error) {
+      console.error("Failed to delete transaction:", error instanceof Error ? error.message : String(error));
+      alert("Failed to delete transaction. Please try again.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -2356,8 +2821,8 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
           <button onClick={() => setSelectedTx(null)} className="p-3 hover:bg-primary/10 rounded-xl transition-all text-white">
             <ChevronLeft className="w-6 h-6" />
           </button>
-          <div className="teal-gradient px-5 py-2 rounded-xl shadow-soft border border-white/20">
-            <h2 className="text-sm font-black text-white uppercase tracking-widest">{t.transactionDetail}</h2>
+          <div className="bg-white/10 px-5 py-2 rounded-xl shadow-soft border border-white/20">
+            <h2 className="text-sm font-black uppercase tracking-widest text-white">{t.transactionDetail}</h2>
           </div>
         </div>
       ) : (
@@ -2375,7 +2840,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
               <h1 className="text-base font-bold text-white tracking-tight leading-none">{profile?.businessName || 'DS-REGISTER'}</h1>
               {profile?.plan === 'pro' && <Crown className="w-3.5 h-3.5 text-yellow-400 fill-yellow-400" />}
             </div>
-            <p className="text-[0.6rem] font-medium text-white/70 uppercase tracking-wider mt-0.5">
+            <p className="text-[0.6rem] font-medium text-white uppercase tracking-wider mt-0.5">
               {profile?.plan === 'pro' ? 'Pro Plan • Unlimited' : (isTrialExpired ? 'Trial Expired' : `Free Trial • ${trialDaysRemaining} Days Left`)}
             </p>
           </div>
@@ -2390,7 +2855,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
             <div className="flex flex-col sm:flex-row justify-between items-start gap-6 mb-8">
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-3">
-                  <h3 className="text-xl font-black text-text tracking-tight uppercase">{selectedTx.customerName || t.customerName}</h3>
+                  <h3 className="text-xl font-black tracking-tight uppercase">{selectedTx.customerName || t.customerName}</h3>
                   {selectedTx.status === 'cancelled' && (
                     <span className="px-2.5 py-1 bg-red-100 text-red-600 border border-red-200 rounded-full text-[0.6rem] font-bold uppercase tracking-widest shrink-0">
                       Cancelled
@@ -2417,18 +2882,18 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
 
                     const diffTime = today.getTime() - tempCreated.getTime();
                     const daysSinceCreated = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                    const daysRemaining = 14 - daysSinceCreated;
+                    const daysRemaining = 30 - daysSinceCreated;
 
                     if (daysRemaining > 0) {
                       return (
                         <span className="px-2.5 py-1 bg-yellow-50 text-yellow-600 border border-yellow-200 rounded-full text-[0.6rem] font-bold uppercase tracking-widest shrink-0">
-                          DL Test in {daysRemaining} Days
+                          DL Test In: {daysRemaining} days
                         </span>
                       );
                     } else {
                       return (
                         <span className="px-2.5 py-1 bg-green-50 text-green-600 border border-green-200 rounded-full text-[0.6rem] font-bold uppercase tracking-widest shrink-0">
-                          Eligible for DL Test
+                          Test Ready
                         </span>
                       );
                     }
@@ -2532,6 +2997,16 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                 <X className="w-4 h-4" /> Cancel Transaction
               </button>
             )}
+            <button 
+              onClick={() => {
+                setSelectedTransactionId(selectedTx.id);
+                setShowDeleteConfirm(true);
+              }}
+              disabled={isReadOnly}
+              className={`sm:col-span-2 flex items-center justify-center gap-3 py-4 bg-red-600 text-white font-black rounded-2xl hover:bg-red-700 transition-all shadow-soft uppercase tracking-widest text-[0.7rem] ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <Trash2 className="w-4 h-4" /> Delete Transaction
+            </button>
           </div>
         </div>
       ) : (
@@ -2558,7 +3033,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
             <button onClick={() => navigate('/billing')} className="p-2 bg-background border border-border rounded-lg hover:bg-primary/5 transition-all text-primary">
               <ChevronLeft className="w-5 h-5" />
             </button>
-            <h2 className="text-base font-bold text-text tracking-tight uppercase">{t.historyTitle}</h2>
+            <h2 className="text-base font-bold tracking-tight uppercase">{t.historyTitle}</h2>
             {profile?.subscriptionStatus === 'trial' && profile.trialEndDate && (
               <CountdownTimer 
                 trialEndDate={profile.trialEndDate} 
@@ -2580,24 +3055,73 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
             </button>
             {isSettingsOpen && (
               <div className="absolute right-0 mt-4 w-[calc(100vw-2rem)] sm:w-64 bg-card border border-border rounded-2xl shadow-2xl py-3 z-50 overflow-hidden origin-top-right">
-                <button 
-                  onClick={handleDownloadAll}
-                  className="w-full text-left px-6 py-4 text-sm font-black text-text hover:bg-primary/5 flex items-center gap-4 transition-colors border-b border-border"
-                >
-                  <Upload className="w-5 h-5 text-primary" /> {t.downloadAllPDF}
-                </button>
-                <button 
-                  onClick={() => { setIsMonthPickerOpen(true); setIsSettingsOpen(false); }}
-                  className="w-full text-left px-6 py-4 text-sm font-black text-text hover:bg-primary/5 flex items-center gap-4 transition-colors border-b border-border"
-                >
-                  <Calendar className="w-5 h-5 text-primary" /> {t.downloadMonthWise}
-                </button>
+                {/* Download All Dropdown */}
+                <div className="border-b border-border">
+                  <button 
+                    onClick={() => setIsDownloadAllOpen(!isDownloadAllOpen)}
+                    className="w-full text-left px-6 py-4 text-sm font-black text-text hover:bg-primary/5 flex items-center justify-between transition-colors"
+                  >
+                    <div className="flex items-center gap-4">
+                      <Upload className="w-5 h-5 text-primary" /> Download All
+                    </div>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${isDownloadAllOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  <AnimatePresence>
+                    {isDownloadAllOpen && (
+                      <motion.div 
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="bg-background/50 overflow-hidden"
+                      >
+                        <button onClick={() => handleDownloadAll('pdf')} className="w-full text-left px-12 py-3 text-xs font-bold text-text/60 hover:text-primary transition-colors">Download All (PDF)</button>
+                        <button onClick={() => handleDownloadAll('xlsx')} className="w-full text-left px-12 py-3 text-xs font-bold text-text/60 hover:text-primary transition-colors">Download All (Excel)</button>
+                        <button onClick={() => handleDownloadAll('csv')} className="w-full text-left px-12 py-3 text-xs font-bold text-text/60 hover:text-primary transition-colors">Download All (CSV)</button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* Download Month-wise Dropdown */}
+                <div className="border-b border-border">
+                  <button 
+                    onClick={() => setIsDownloadMonthlyOpen(!isDownloadMonthlyOpen)}
+                    className="w-full text-left px-6 py-4 text-sm font-black text-text hover:bg-primary/5 flex items-center justify-between transition-colors"
+                  >
+                    <div className="flex items-center gap-4">
+                      <Calendar className="w-5 h-5 text-primary" /> Download Month-wise
+                    </div>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${isDownloadMonthlyOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  <AnimatePresence>
+                    {isDownloadMonthlyOpen && (
+                      <motion.div 
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="bg-background/50 overflow-hidden"
+                      >
+                        <button onClick={() => { setSelectedFormat('pdf'); setIsMonthPickerOpen(true); setIsSettingsOpen(false); }} className="w-full text-left px-12 py-3 text-xs font-bold text-text/60 hover:text-primary transition-colors">Download Month-wise (PDF)</button>
+                        <button onClick={() => { setSelectedFormat('xlsx'); setIsMonthPickerOpen(true); setIsSettingsOpen(false); }} className="w-full text-left px-12 py-3 text-xs font-bold text-text/60 hover:text-primary transition-colors">Download Month-wise (Excel)</button>
+                        <button onClick={() => { setSelectedFormat('csv'); setIsMonthPickerOpen(true); setIsSettingsOpen(false); }} className="w-full text-left px-12 py-3 text-xs font-bold text-text/60 hover:text-primary transition-colors">Download Month-wise (CSV)</button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
                 <button 
                   onClick={handleClearAll}
                   disabled={isReadOnly}
                   className={`w-full text-left px-6 py-4 text-sm font-black text-red-600 hover:bg-red-50 flex items-center gap-4 transition-colors ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <Trash2 className="w-5 h-5" /> {t.clearAll}
+                </button>
+
+                <button 
+                  onClick={() => { navigate('/trash'); setIsSettingsOpen(false); }}
+                  className="w-full text-left px-6 py-4 text-sm font-black text-text hover:bg-primary/5 flex items-center gap-4 transition-colors"
+                >
+                  <Trash2 className="w-5 h-5 text-primary" /> Trash
                 </button>
               </div>
             )}
@@ -2614,7 +3138,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
               <div className="p-2 bg-primary/10 rounded-lg text-primary">
                 <Palette className="w-5 h-5" />
               </div>
-              <h3 className="text-sm font-black text-text uppercase tracking-widest">Business Analytics</h3>
+              <h3 className="text-sm font-black uppercase tracking-widest">Business Analytics</h3>
             </div>
             <motion.div
               animate={{ rotate: isAnalyticsOpen ? 180 : 0 }}
@@ -2633,36 +3157,83 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                 transition={{ duration: 0.3, ease: "easeInOut" }}
               >
                 <div className="px-6 pb-6 pt-2">
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    <div className="bg-background/50 p-4 rounded-xl border border-border">
-                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Transactions</p>
-                      <p className="text-lg font-bold text-text">{monthlyStats.totalTransactions}</p>
-                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">This Month</p>
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 bg-background/50 p-6 rounded-2xl border border-border h-[300px]">
+                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-4">Revenue Trend (Current Month)</p>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={monthlyStats.chartData}>
+                          <defs>
+                            <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.3}/>
+                              <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.05)" />
+                          <XAxis 
+                            dataKey="day" 
+                            fontSize={10} 
+                            tickLine={false} 
+                            axisLine={false}
+                            tick={{ fill: 'rgba(0,0,0,0.3)' }}
+                          />
+                          <YAxis 
+                            fontSize={10} 
+                            tickLine={false} 
+                            axisLine={false}
+                            tick={{ fill: 'rgba(0,0,0,0.3)' }}
+                            tickFormatter={(value) => `₹${value}`}
+                          />
+                          <Tooltip 
+                            contentStyle={{ 
+                              backgroundColor: 'white', 
+                              borderRadius: '12px', 
+                              border: '1px solid rgba(0,0,0,0.1)',
+                              boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)'
+                            }}
+                            itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                          />
+                          <Area 
+                            type="monotone" 
+                            dataKey="revenue" 
+                            stroke="var(--color-primary)" 
+                            fillOpacity={1} 
+                            fill="url(#colorRevenue)" 
+                            strokeWidth={3}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
                     </div>
-                    <div className="bg-background/50 p-4 rounded-xl border border-border">
-                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Revenue</p>
-                      <p className="text-lg font-bold text-green-600">₹{monthlyStats.totalRevenue.toLocaleString()}</p>
-                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Fully Paid</p>
-                    </div>
-                    <div className="bg-background/50 p-4 rounded-xl border border-border">
-                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Collected</p>
-                      <p className="text-lg font-bold text-primary">₹{monthlyStats.totalCollected.toLocaleString()}</p>
-                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Sum of Paid</p>
-                    </div>
-                    <div className="bg-background/50 p-4 rounded-xl border border-border">
-                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">DL Test Revenue</p>
-                      <p className="text-lg font-bold text-indigo-600">₹{monthlyStats.dlTestRevenue.toLocaleString()}</p>
-                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">This Month</p>
-                    </div>
-                    <div className="bg-background/50 p-4 rounded-xl border border-border">
-                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Pending</p>
-                      <p className="text-lg font-bold text-red-600">₹{monthlyStats.totalPending.toLocaleString()}</p>
-                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Due Amount</p>
-                    </div>
-                    <div className="bg-background/50 p-4 rounded-xl border border-border">
-                      <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Cancelled Count</p>
-                      <p className="text-lg font-bold text-red-600">{monthlyStats.cancelledCount}</p>
-                      <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">This Month</p>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-background/50 p-4 rounded-xl border border-border">
+                        <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Transactions</p>
+                        <p className="text-lg font-bold text-text">{monthlyStats.totalTransactions}</p>
+                        <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">This Month</p>
+                      </div>
+                      <div className="bg-background/50 p-4 rounded-xl border border-border">
+                        <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Revenue</p>
+                        <p className="text-lg font-bold text-green-600">₹{monthlyStats.totalRevenue.toLocaleString()}</p>
+                        <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Fully Paid</p>
+                      </div>
+                      <div className="bg-background/50 p-4 rounded-xl border border-border">
+                        <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Collected</p>
+                        <p className="text-lg font-bold text-primary">₹{monthlyStats.totalCollected.toLocaleString()}</p>
+                        <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Sum of Paid</p>
+                      </div>
+                      <div className="bg-background/50 p-4 rounded-xl border border-border">
+                        <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">DL Test Revenue</p>
+                        <p className="text-lg font-bold text-indigo-600">₹{monthlyStats.dlTestRevenue.toLocaleString()}</p>
+                        <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">This Month</p>
+                      </div>
+                      <div className="bg-background/50 p-4 rounded-xl border border-border">
+                        <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Total Pending</p>
+                        <p className="text-lg font-bold text-red-600">₹{monthlyStats.totalPending.toLocaleString()}</p>
+                        <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">Due Amount</p>
+                      </div>
+                      <div className="bg-background/50 p-4 rounded-xl border border-border">
+                        <p className="text-[0.6rem] font-black text-text/40 uppercase tracking-widest mb-1">Cancelled Count</p>
+                        <p className="text-lg font-bold text-red-600">{monthlyStats.cancelledCount}</p>
+                        <p className="text-[0.55rem] font-bold text-text/20 uppercase mt-1">This Month</p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2702,7 +3273,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                   : 'bg-card text-text/50 border-border hover:bg-background'
                 }`}
               >
-                DL Test
+                Test Ready
               </button>
               <button 
                 onClick={() => setFilterType(filterType === 'cancelled' ? 'all' : 'cancelled')}
@@ -2753,7 +3324,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
           </div>
         </div>
 
-        {filteredHistory.length === 0 ? (
+        {filteredHistory.length === 0 && !loading && !isSearching ? (
           <div className="text-center py-24 bg-card rounded-[2rem] border-2 border-dashed border-border flex flex-col items-center justify-center shadow-soft">
             <div className="w-20 h-20 bg-background rounded-full flex items-center justify-center mb-6">
               <History className="w-10 h-10 text-text/20" />
@@ -2773,7 +3344,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                 <div className="flex flex-wrap justify-between items-start gap-4 mb-4">
                   <div className="flex-1">
                     <div className="flex flex-wrap items-center gap-3 mb-1">
-                      <h3 className="font-bold text-text text-base group-hover:text-primary transition-colors tracking-tight">
+                      <h3 className="font-bold text-base group-hover:text-primary transition-colors tracking-tight">
                         {tx.customerName || tx.customerMobile}
                       </h3>
                       {tx.status === 'cancelled' && (
@@ -2802,18 +3373,18 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
 
                         const diffTime = today.getTime() - tempCreated.getTime();
                         const daysSinceCreated = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                        const daysRemaining = 14 - daysSinceCreated;
+                        const daysRemaining = 30 - daysSinceCreated;
 
                         if (daysRemaining > 0) {
                           return (
                             <span className="px-2 py-0.5 bg-yellow-50 text-yellow-600 border border-yellow-200 rounded-full text-[0.55rem] font-bold uppercase tracking-widest shrink-0">
-                              DL Test in {daysRemaining} Days
+                              DL Test In: {daysRemaining} days
                             </span>
                           );
                         } else {
                           return (
                             <span className="px-2 py-0.5 bg-green-50 text-green-600 border border-green-200 rounded-full text-[0.55rem] font-bold uppercase tracking-widest shrink-0">
-                              Eligible for DL Test
+                              Test Ready
                             </span>
                           );
                         }
@@ -2878,8 +3449,17 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                 </div>
               </div>
             ))}
+            <div ref={lastElementRef} className="h-1" />
+            
+            {(isFetchingMore || isSearching) && (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-8 h-8 text-primary animate-spin" />
+              </div>
+            )}
           </div>
         )}
+      </div>
+    )}
 
         <AnimatePresence>
           {isMonthPickerOpen && (
@@ -2890,7 +3470,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                 exit={{ opacity: 0, scale: 0.95 }}
                 className="bg-card border border-border rounded-[2rem] p-8 w-full max-w-md shadow-2xl"
               >
-                <h3 className="text-xl font-black text-text mb-6 uppercase tracking-tight">{t.downloadMonthWise}</h3>
+                <h3 className="text-xl font-black mb-6 uppercase tracking-tight">{t.downloadMonthWise}</h3>
                 
                 <div className="space-y-6">
                   <div>
@@ -2930,7 +3510,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                       {t.cancel}
                     </button>
                     <button 
-                      onClick={handleDownloadMonthly}
+                      onClick={() => handleDownloadMonthly(selectedFormat)}
                       className="py-4 teal-gradient text-white font-black rounded-2xl hover:opacity-90 transition-all shadow-soft uppercase tracking-widest text-xs"
                     >
                       {t.download}
@@ -2954,7 +3534,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                 >
                   <div className="p-8">
                     <div className="flex justify-between items-center mb-6">
-                      <h3 className="text-xl font-black text-red-600 tracking-tight uppercase">Delete All Transactions</h3>
+                      <h3 className="text-xl font-black tracking-tight uppercase">Delete All Transactions</h3>
                       <button onClick={() => setIsClearAllModalOpen(false)} className="p-2 hover:bg-red-50 rounded-full transition-colors">
                         <X className="w-5 h-5 text-red-600/40" />
                       </button>
@@ -2995,10 +3575,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                 </motion.div>
               </div>
             )}
-          </AnimatePresence>
-          
-        </div>
-      )}
+        </AnimatePresence>
         <AnimatePresence>
           {isAddPaymentOpen && selectedTx && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -3010,7 +3587,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
               >
                 <div className="p-8">
                   <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-black text-text tracking-tight uppercase">Add Payment</h3>
+                    <h3 className="text-xl font-black tracking-tight uppercase">Add Payment</h3>
                     <button onClick={() => setIsAddPaymentOpen(false)} className="p-2 hover:bg-primary/10 rounded-full transition-colors">
                       <X className="w-5 h-5 text-text/40" />
                     </button>
@@ -3083,7 +3660,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                   <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
                     <AlertTriangle className="w-8 h-8 text-red-600" />
                   </div>
-                  <h3 className="text-xl font-black text-text tracking-tight uppercase mb-2">Cancel Transaction</h3>
+                  <h3 className="text-xl font-black tracking-tight uppercase mb-2">Cancel Transaction</h3>
                   <p className="text-sm font-bold text-text/40 mb-8">
                     Are you sure you want to cancel this transaction? 
                     <br />
@@ -3123,6 +3700,47 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
         profile={profile}
         onUpdate={(updates) => setProfile(prev => prev ? { ...prev, ...updates } : null)}
       />
+
+      <AnimatePresence>
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-card border border-border rounded-[2.5rem] p-8 w-full max-w-md shadow-2xl text-center"
+            >
+              <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-100">
+                <Trash2 className="w-10 h-10 text-red-500" />
+              </div>
+              <h3 className="text-2xl font-black mb-3 text-text tracking-tight uppercase">{t.deleteTransaction}</h3>
+              <p className="text-text/60 mb-8 font-medium leading-relaxed">
+                Are you sure you want to move this transaction to Trash? This action can be undone from the Trash section.
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <button 
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="py-4 bg-background border border-border text-text/60 font-black rounded-2xl hover:bg-primary/5 transition-all uppercase tracking-widest text-xs"
+                >
+                  {t.cancel}
+                </button>
+                <button 
+                  onClick={handleDeleteTransaction}
+                  disabled={isDeleting}
+                  className="py-4 bg-red-500 text-white font-black rounded-2xl hover:bg-red-600 transition-all shadow-lg shadow-red-500/20 uppercase tracking-widest text-xs flex items-center justify-center gap-2"
+                >
+                  {isDeleting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  {t.delete}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       </div>
     </Layout>
   );
@@ -3144,7 +3762,7 @@ function SuccessPage({ lang, setLang, theme, setTheme }: {
         <div className="w-24 h-24 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-8 shadow-soft border border-green-200">
           <CheckCircle2 className="w-12 h-12" />
         </div>
-        <h2 className="text-4xl font-black text-text tracking-tighter uppercase mb-4">{t.successTitle}</h2>
+        <h2 className="text-4xl font-black tracking-tighter uppercase mb-4">{t.successTitle}</h2>
         <p className="text-text/50 font-bold max-w-sm mb-12 leading-relaxed">
           Your transaction has been saved successfully. You can view it in the history.
         </p>
@@ -3172,7 +3790,7 @@ function SuccessPage({ lang, setLang, theme, setTheme }: {
 function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'deletion' | 'contact' }) {
   const navigate = useNavigate();
   const lastUpdated = "March 2, 2026";
-  const supportEmail = "support@yourdomain.com";
+  const supportEmail = "ivantech0611@gmail.com";
 
   const content = {
     privacy: {
@@ -3283,21 +3901,21 @@ function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'deletion'
           <button onClick={() => navigate(-1)} className="p-2 hover:bg-white/10 rounded-lg transition-all text-white">
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <h2 className="text-sm font-black text-white uppercase tracking-widest">{pageData.title}</h2>
+          <h2 className="text-sm font-black uppercase tracking-widest text-white">{pageData.title}</h2>
         </div>
       }
     >
       <div className="max-w-3xl mx-auto">
         <div className="bg-card border border-border rounded-[2rem] p-8 md:p-12 shadow-soft">
           <div className="mb-8">
-            <h1 className="text-3xl font-black text-text tracking-tighter uppercase mb-2">{pageData.title}</h1>
+            <h1 className="text-3xl font-black tracking-tighter uppercase mb-2">{pageData.title}</h1>
             <p className="text-xs font-bold text-text/30 uppercase tracking-widest">Last Updated: {lastUpdated}</p>
           </div>
 
           <div className="space-y-8">
             {pageData.sections.map((section, idx) => (
               <div key={idx} className="space-y-3">
-                <h3 className="text-sm font-black text-text uppercase tracking-widest">{section.heading}</h3>
+                <h3 className="text-sm font-black uppercase tracking-widest">{section.heading}</h3>
                 <p className="text-text/60 leading-relaxed text-sm font-medium">
                   {section.text}
                 </p>
@@ -3332,6 +3950,60 @@ function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'deletion'
 export default function App() {
   const [lang, setLang] = useState<Language>(() => (localStorage.getItem('ds_register_lang') as Language) || 'en');
   const [theme, setTheme] = useState<ThemeId>(() => (localStorage.getItem('ds_register_theme') as ThemeId) || 'modern');
+  const [globalError, setGlobalError] = useState<{ title: string, message: string } | null>(null);
+
+  useEffect(() => {
+    const handleOnline = () => setGlobalError(null);
+    const handleOffline = () => setGlobalError({
+      title: "Something went wrong",
+      message: "Internet connection lost. Please check your network."
+    });
+
+    const handleGlobalError = (event: ErrorEvent) => {
+      if (event.message?.includes('Firebase')) {
+        setGlobalError({
+          title: "Something went wrong",
+          message: "Unable to load data from server."
+        });
+      }
+    };
+
+    const handlePromiseRejection = (event: PromiseRejectionEvent) => {
+      const error = event.reason;
+      // Sanitize error object to avoid circular references if it's a complex Firebase error
+      // Using a safer way to extract error information without triggering circular structure issues
+      const errorCode = (error && typeof error === 'object' && 'code' in error) ? String(error.code) : '';
+      const errorMessage = (error && typeof error === 'object' && 'message' in error) ? String(error.message) : '';
+      
+      if (errorCode.includes('auth/')) {
+        setGlobalError({
+          title: "Something went wrong",
+          message: "Authentication failed. Please login again."
+        });
+      } else if (errorCode.includes('permission-denied') || error?.name === 'FirebaseError' || errorMessage.includes('Firestore')) {
+        setGlobalError({
+          title: "Something went wrong",
+          message: "Unable to load data from server."
+        });
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('error', handleGlobalError);
+    window.addEventListener('unhandledrejection', handlePromiseRejection);
+
+    if (!navigator.onLine) {
+      handleOffline();
+    }
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('error', handleGlobalError);
+      window.removeEventListener('unhandledrejection', handlePromiseRejection);
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('ds_register_lang', lang);
@@ -3358,8 +4030,23 @@ export default function App() {
     }
   }, [theme]);
 
+  if (globalError) {
+    return (
+      <ErrorBoundary>
+        <GlobalErrorScreen 
+          title={globalError.title} 
+          message={globalError.message} 
+          onRetry={() => {
+            setGlobalError(null);
+            window.location.reload();
+          }} 
+        />
+      </ErrorBoundary>
+    );
+  }
+
   return (
-    <BrowserRouter>
+    <ErrorBoundary>
       <Routes>
         <Route path="/" element={<LoginPage lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} />} />
         <Route path="/setup" element={
@@ -3377,6 +4064,11 @@ export default function App() {
             <HistoryPage lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} />
           </ProtectedRoute>
         } />
+        <Route path="/trash" element={
+          <ProtectedRoute>
+            <TrashPage lang={lang} />
+          </ProtectedRoute>
+        } />
         <Route path="/success" element={
           <ProtectedRoute>
             <SuccessPage lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} />
@@ -3389,6 +4081,6 @@ export default function App() {
         <Route path="/contact" element={<LegalPage type="contact" />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </BrowserRouter>
+    </ErrorBoundary>
   );
 }

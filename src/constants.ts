@@ -27,7 +27,7 @@ export const SERVICE_CATEGORIES = {
     "NEW REGISTRATION", "TEMP REGISTRATION", "RE-REGISTRATION", "TRANSFER OF OWNERSHIP",
     "HYPOTHECATION TERMINATION", "HYPOTHECATION ADDITION", "HYPOTHECATION CONTINUATION",
     "DUPLICATE RC", "CHANGE OF ADDRESS IN RC", "CONVECTION", "ALTERATIONS",
-    "FITNESS CERTIFICATE", "NOC", "MODIFY", "OTHERS (RC)"
+    "FITNESS CERTIFICATE", "NOC", "MODIFY", "RENEWAL OF REGISTRATION", "OTHERS (RC)"
   ],
   "PERMIT RELATED": [
     "FRESH PERMIT", "RENEWAL OF PERMIT", "SURRENDER OF PERMIT",
@@ -91,6 +91,8 @@ export const TRANSLATIONS: Record<Language, Translations> = {
     selectYear: "Select Year",
     download: "Download",
     cancel: "Cancel",
+    delete: "Delete",
+    deleteTransaction: "Delete Transaction",
     noTransactionsMonth: "No transactions found for selected month."
   },
   ta: {
@@ -145,6 +147,8 @@ export const TRANSLATIONS: Record<Language, Translations> = {
     selectYear: "ஆண்டைத் தேர்ந்தெடுக்கவும்",
     download: "பதிவிறக்கு",
     cancel: "ரத்துசெய்",
+    delete: "அழி",
+    deleteTransaction: "பரிவர்த்தனையை அழி",
     noTransactionsMonth: "தேர்ந்தெடுக்கப்பட்ட மாதத்தில் பரிவர்த்தனைகள் எதுவும் இல்லை."
   },
   hi: {
@@ -199,6 +203,8 @@ export const TRANSLATIONS: Record<Language, Translations> = {
     selectYear: "वर्ष चुनें",
     download: "डाउनलोड",
     cancel: "रद्द करें",
+    delete: "हटाएं",
+    deleteTransaction: "लेन-देन हटाएं",
     noTransactionsMonth: "चयनित महीने के लिए कोई लेन-देन नहीं मिला।"
   },
   ml: {
@@ -253,6 +259,8 @@ export const TRANSLATIONS: Record<Language, Translations> = {
     selectYear: "വർഷം തിരഞ്ഞെടുക്കുക",
     download: "ഡൗൺലോഡ്",
     cancel: "റദ്ദാക്കുക",
+    delete: "നീക്കം ചെയ്യുക",
+    deleteTransaction: "ഇടപാട് നീക്കം ചെയ്യുക",
     noTransactionsMonth: "തിരഞ്ഞെടുത്ത മാസത്തിൽ ഇടപാടുകളൊന്നും കണ്ടെത്തിയില്ല."
   }
 };
@@ -309,6 +317,36 @@ export const THEMES: Theme[] = [
       ring: '#6366f1',
       accent: '#6366f1',
     }
+  },
+  {
+    id: 'red-pro',
+    name: 'Red Pro',
+    colors: {
+      primary: '#8B0000',
+      secondary: '#FFE4E1',
+      background: '#FFF5F5',
+      foreground: '#1A1A1A',
+      card: '#ffffff',
+      border: '#FFDADA',
+      input: '#FFF5F5',
+      ring: '#8B0000',
+      accent: '#B22222',
+    }
+  },
+  {
+    id: 'black-white',
+    name: 'Black & White',
+    colors: {
+      primary: '#000000',
+      secondary: '#f1f5f9',
+      background: '#ffffff',
+      foreground: '#000000',
+      card: '#ffffff',
+      border: '#000000',
+      input: '#ffffff',
+      ring: '#000000',
+      accent: '#333333',
+    }
   }
 ];
 
@@ -321,9 +359,9 @@ Welcome to DS-REGISTER. By using our application, you agree to the following ter
 By accessing or using DS-REGISTER, you agree to be bound by these Terms and Conditions and our Privacy Policy.
 
 ## 2. Free Trial
-New users are eligible for a 30-day free trial period starting from the date of account creation.
+New users are eligible for a 14-day free trial period starting from the date of account creation.
 During the trial period, users may access premium features without payment.
-After the 30-day trial expires, continued access to premium features requires an active paid subscription.
+After the 14-day trial expires, continued access to premium features requires an active paid subscription.
 The trial period is granted once per user account and cannot be reset by deleting data or creating duplicate accounts.
 
 ## 3. User Responsibilities
@@ -357,5 +395,5 @@ We implement reasonable security measures to protect your information from unaut
 We may use third-party services like Firebase for data storage and Razorpay for payment processing. These services have their own privacy policies.
 
 ## 5. User Rights
-You have the right to access, update, or delete your personal information at any time through the application settings.
+You have the right to access, update, or delete your personal information at any time through the application settings. You can contact us at ivantech0611@gmail.com for any assistance.
 `;

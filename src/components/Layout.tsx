@@ -15,7 +15,7 @@ interface LayoutProps {
 export function Layout({ children, headerRight, title }: LayoutProps & { title?: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-background text-text font-sans flex flex-col">
-      <header className="sticky top-0 z-50 w-full teal-gradient shadow-md">
+      <header className="sticky top-0 z-50 w-full bg-primary shadow-md">
         <div className="container mx-auto flex h-16 items-center justify-between px-6">
           <div className="flex items-center gap-3">
             {title || <h1 className="text-xl font-bold tracking-tighter text-white">DS-REGISTER</h1>}

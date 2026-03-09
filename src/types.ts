@@ -2,6 +2,7 @@ export type Language = 'en' | 'ta' | 'hi' | 'ml';
 
 export interface BusinessProfile {
   businessName: string;
+  logo?: string;
   mobileNumber: string;
   email: string;
   address: string;
@@ -34,6 +35,7 @@ export interface Transaction {
   subtotal: number;
   tax?: number;
   gstPercent?: number;
+  discount?: number;
   totalAmount: number;
   amountPaid: number;
   dueAmount: number;
@@ -43,9 +45,10 @@ export interface Transaction {
   dlTestCompleted?: boolean;
   status?: 'cancelled';
   cancelledAt?: any;
+  deletedAt?: any;
 }
 
-export type ThemeId = 'modern' | 'dark-finance' | 'minimal';
+export type ThemeId = 'modern' | 'dark-finance' | 'minimal' | 'red-pro' | 'black-white';
 
 export interface Theme {
   id: ThemeId;
@@ -118,5 +121,7 @@ export interface Translations {
   selectYear: string;
   download: string;
   cancel: string;
+  delete: string;
+  deleteTransaction: string;
   noTransactionsMonth: string;
 }
