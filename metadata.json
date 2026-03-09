@@ -1,5 +1,5 @@
 {
-  "name": "DS-REGISTER",
-  "description": "A professional business registration and profile management application.",
+  "name": "DS-REGISTER (Driving School Register)",
+  "description": "A professional digital register and billing management application specifically designed for Driving Schools. Manage student records, generate receipts, track payments, and analyze business growth.",
   "requestFramePermissions": []
 }

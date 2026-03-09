@@ -1105,15 +1105,15 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
   const [errors, setErrors] = useState<Record<string, string>>({});
   
   const predefinedLogos = [
-    "/assets/logos/logo1.png",
-    "/assets/logos/logo2.png",
-    "/assets/logos/logo3.png",
-    "/assets/logos/logo4.png",
-    "/assets/logos/logo5.png",
-    "/assets/logos/logo6.png",
-    "/assets/logos/logo7.png",
-    "/assets/logos/logo8.png",
-    "/assets/logos/logo9.png"
+    "https://picsum.photos/seed/logo1/200",
+    "https://picsum.photos/seed/logo2/200",
+    "https://picsum.photos/seed/logo3/200",
+    "https://picsum.photos/seed/logo4/200",
+    "https://picsum.photos/seed/logo5/200",
+    "https://picsum.photos/seed/logo6/200",
+    "https://picsum.photos/seed/logo7/200",
+    "https://picsum.photos/seed/logo8/200",
+    "https://picsum.photos/seed/logo9/200"
   ];
 
   const [formData, setFormData] = useState<Partial<BusinessProfile>>({
@@ -1659,8 +1659,7 @@ function BillingPage({ lang, setLang, theme, setTheme }: {
       setSearchQuery('');
       setErrors({});
       
-      alert("Transaction saved successfully!");
-      navigate('/history');
+      navigate('/success');
     } catch (error) {
       console.error("Error saving transaction:", error instanceof Error ? error.message : String(error));
       alert("Failed to save transaction. Please try again.");
