@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { doc, getDoc, setDoc, updateDoc, collection, query, orderBy, getDocs, deleteDoc, serverTimestamp, addDoc, runTransaction, increment, onSnapshot, limit, startAfter, QueryDocumentSnapshot, where, or } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, query, orderBy, getDocs, deleteDoc, serverTimestamp, addDoc, runTransaction, increment, onSnapshot, limit, startAfter, QueryDocumentSnapshot, where, or, Timestamp } from 'firebase/firestore';
 import { BusinessProfile, Transaction } from '../types';
 
 export const getUserProfile = async (uid: string): Promise<BusinessProfile | null> => {
@@ -313,4 +313,68 @@ export const deleteUserAccount = async (uid: string) => {
   // 3. Delete user root document (where termsAccepted is stored)
   const userRef = doc(db, 'users', uid);
   await deleteDoc(userRef);
+};
+
+export const generateSampleTransactions = async (uid: string) => {
+  const profileRef = doc(db, 'users', uid, 'business', 'profile');
+  const transactionsColRef = collection(db, 'users', uid, 'transactions');
+
+  const names = [
+    "Aarav Sharma", "Aditi Rao", "Arjun Singh", "Ananya Patel", "Bhavya Gupta",
+    "Chaitanya Reddy", "Deepak Kumar", "Esha Verma", "Farhan Khan", "Gautam Iyer",
+    "Ishita Das", "Jatin Malhotra", "Kavya Nair", "Lokesh Jain", "Meera Joshi",
+    "Nikhil Saxena", "Ojasvi Mishra", "Pranav Kulkarni", "Riya Sen", "Siddharth Bose",
+    "Tanvi Hegde", "Uday Chopra", "Vaishali Deshmukh", "Varun Dhawan", "Yashasvi Jaiswal",
+    "Zoya Akhtar", "Rahul Dravid", "Sachin Tendulkar", "Virat Kohli", "MS Dhoni"
+  ];
+
+  const services = [
+    { name: "License Registration", price: 1500 },
+    { name: "License Renewal", price: 800 },
+    { name: "Learner License", price: 500 },
+    { name: "Driving Test Booking", price: 300 },
+    { name: "Address Change", price: 400 },
+    { name: "Duplicate License", price: 600 }
+  ];
+
+  await runTransaction(db, async (transaction_db) => {
+    const profileSnap = await transaction_db.get(profileRef);
+    let lastReceiptNumber = 0;
+    if (profileSnap.exists()) {
+      lastReceiptNumber = profileSnap.data().lastReceiptNumber || 0;
+    }
+
+    for (let i = 0; i < 30; i++) {
+      const name = names[i % names.length];
+      const mobile = "9" + Math.floor(100000000 + Math.random() * 900000000).toString();
+      const service = services[Math.floor(Math.random() * services.length)];
+      const totalAmount = Math.floor(Math.random() * (2000 - 200 + 1)) + 200;
+      const amountPaid = Math.floor(Math.random() * (totalAmount + 1));
+      const dueAmount = totalAmount - amountPaid;
+      
+      const daysAgo = Math.floor(Math.random() * 30);
+      const date = new Date();
+      date.setDate(date.getDate() - daysAgo);
+      
+      const receiptNumber = (lastReceiptNumber + i + 1).toString().padStart(5, '0');
+      
+      const newTxRef = doc(transactionsColRef);
+      transaction_db.set(newTxRef, {
+        customerName: name,
+        customerMobile: mobile,
+        services: [{ name: service.name, price: totalAmount }],
+        subtotal: totalAmount,
+        totalAmount: totalAmount,
+        amountPaid: amountPaid,
+        dueAmount: dueAmount,
+        paymentStatus: dueAmount === 0 ? 'Paid' : 'Unpaid',
+        receiptNumber: receiptNumber,
+        createdAt: Timestamp.fromDate(date)
+      });
+    }
+
+    transaction_db.update(profileRef, {
+      lastReceiptNumber: lastReceiptNumber + 30
+    });
+  });
 };

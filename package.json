@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "tsx server.ts",
     "build": "tsc && vite build",
     "lint": "tsc --noEmit",
     "preview": "vite preview"
@@ -13,12 +13,14 @@
     "@tailwindcss/vite": "^4.0.0",
     "clsx": "^2.1.0",
     "d3": "^7.9.0",
+    "express": "^5.2.1",
     "firebase": "^10.9.0",
     "framer-motion": "^12.35.0",
     "jspdf": "^4.2.0",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.363.0",
     "motion": "^11.0.24",
+    "razorpay": "^2.9.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^9.0.1",
@@ -29,9 +31,11 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.2.2",
     "vite": "^5.2.2"
   }

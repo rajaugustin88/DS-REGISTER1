@@ -395,5 +395,5 @@ We implement reasonable security measures to protect your information from unaut
 We may use third-party services like Firebase for data storage and Razorpay for payment processing. These services have their own privacy policies.
 
 ## 5. User Rights
-You have the right to access, update, or delete your personal information at any time through the application settings. You can contact us at ivantech0611@gmail.com for any assistance.
+You have the right to access, update, or delete your personal information at any time through the application settings. You can contact us at support@dsregister.in for any assistance.
 `;
