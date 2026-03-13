@@ -149,7 +149,11 @@ function SubscriptionModal({ isOpen, onClose, profile, onUpdate, themeId }: {
             headers: {
               "Content-Type": "application/json"
             },
-            body: JSON.stringify(response)
+            body: JSON.stringify({
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_subscription_id: response.razorpay_subscription_id,
+              razorpay_signature: response.razorpay_signature
+            })
           });
 
           // Update local profile state after successful payment
@@ -1308,34 +1312,6 @@ function SetupPage({ lang, setLang, theme, setTheme }: {
                 {errors.mobileNumber && <p className="text-red-500 text-[0.625rem] font-medium uppercase tracking-tight">{errors.mobileNumber}</p>}
               </div>
 
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-[0.65rem] font-medium text-text/50 uppercase tracking-widest">Select Business Logo (Optional)</label>
-                <div className="relative">
-                  <select
-                    name="logo"
-                    value={formData.logo || ''}
-                    onChange={(e) => setFormData(prev => ({ ...prev, logo: e.target.value }))}
-                    className="w-full pl-12 pr-4 py-2.5 bg-input border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-medium text-text appearance-none"
-                  >
-                    <option value="">Default (Google Photo)</option>
-                    {predefinedLogos.map((logo, idx) => (
-                      <option key={idx} value={logo}>Logo {idx + 1}</option>
-                    ))}
-                  </select>
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                    {formData.logo ? (
-                      <img src={formData.logo} alt="Selected" className="w-6 h-6 rounded-full object-cover border border-border" />
-                    ) : (
-                      <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center border border-border">
-                        <User className="w-3 h-3 text-primary" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                    <ChevronDown className="w-4 h-4 text-text/30" />
-                  </div>
-                </div>
-              </div>
             </div>
 
             <div className="space-y-1.5">
@@ -3160,14 +3136,6 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
                   <Trash2 className="w-5 h-5 text-primary" /> Trash
                 </button>
 
-                <button 
-                  onClick={handleGenerateTestData}
-                  disabled={isGenerating}
-                  className="w-full text-left px-6 py-4 text-sm font-black text-primary hover:bg-primary/5 flex items-center gap-4 transition-colors"
-                >
-                  <Sparkles className={`w-5 h-5 ${isGenerating ? 'animate-spin' : ''}`} /> 
-                  {isGenerating ? 'Generating...' : 'Generate 30 Test Data'}
-                </button>
               </div>
             )}
           </div>
