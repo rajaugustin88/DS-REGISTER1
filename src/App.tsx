@@ -52,9 +52,10 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
     return { hasError: true, errorMessage: error.message };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // Avoid circular structure error by not logging complex React errorInfo if it might be serialized
-    console.error("Uncaught error:", error.message);
+  componentDidCatch(error: Error, _errorInfo: React.ErrorInfo) {
+    // Avoid circular structure error by not logging complex React errorInfo
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Uncaught error:", message);
   }
 
   render() {
@@ -71,8 +72,8 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
-const RAZORPAY_KEY_ID = 'rzp_test_SPw86guEugvv7B';
-const MONTHLY_PLAN_ID = 'plan_SPwAWZhJVvGXFI';
+const RAZORPAY_KEY_ID = 'rzp_live_SQaKkJfATs0tki';
+const MONTHLY_PLAN_ID = 'plan_SPxWN1yHZqJIdq';
 
 // --- Countdown Timer Component ---
 function CountdownTimer({ trialEndDate, onExpire }: { trialEndDate: string, onExpire: () => void }) {
@@ -132,17 +133,18 @@ function SubscriptionModal({ isOpen, onClose, profile, onUpdate, themeId }: {
       const data = await res.json();
 
       const currentTheme = THEMES.find(t => t.id === themeId) || THEMES[0];
+      const currentThemeColor = currentTheme.colors.primary;
+
       const options = {
-        key: RAZORPAY_KEY_ID,
+        key: "rzp_live_SQaKkJfATs0tki",
         subscription_id: data.id,
         name: "DS REGISTER",
         description: "Monthly Subscription ₹99",
-        image: "https://picsum.photos/200",
-        handler: async function (response: any) {
-          console.log("Payment success:", response);
-          
-          // Send payment details to backend for verification
-          await fetch("/verifySubscription", {
+        theme: {
+          color: currentThemeColor
+        },
+        handler: function (response: any) {
+          fetch("/verifySubscription", {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -150,11 +152,11 @@ function SubscriptionModal({ isOpen, onClose, profile, onUpdate, themeId }: {
             body: JSON.stringify(response)
           });
 
+          // Update local profile state after successful payment
           const user = auth.currentUser;
           if (!user) return;
 
           const now = new Date();
-          // Start after free trial or current subscription expiry if applicable
           let startDate = now;
           if (profile?.expiryDate) {
             const currentExpiry = new Date(profile.expiryDate);
@@ -175,30 +177,38 @@ function SubscriptionModal({ isOpen, onClose, profile, onUpdate, themeId }: {
             expiryDate: expiry.toISOString()
           };
 
-          await saveUserProfile(user.uid, updates as BusinessProfile);
-          onUpdate(updates);
-          alert(`Successfully subscribed to monthly plan!`);
-          onClose();
-          setLoading(null);
+          saveUserProfile(user.uid, updates as BusinessProfile).then(() => {
+            onUpdate(updates);
+            alert(`Successfully subscribed to monthly plan!`);
+            onClose();
+            setLoading(null);
+          });
         },
         prefill: {
           name: profile?.businessName || "",
           email: profile?.email || "",
           contact: profile?.mobileNumber || ""
-        },
-        theme: {
-          color: currentTheme.colors.primary
         }
       };
 
       const rzp = new (window as any).Razorpay(options);
-      rzp.open();
+      
       rzp.on('payment.failed', function (response: any) {
-        alert("Payment failed: " + response.error.description);
+        const errorDesc = response?.error?.description || "Unknown error";
+        console.error("Payment failed:", {
+          code: response?.error?.code,
+          description: errorDesc,
+          source: response?.error?.source,
+          step: response?.error?.step,
+          reason: response?.error?.reason
+        });
+        alert("Payment failed: " + errorDesc);
         setLoading(null);
       });
+
+      rzp.open();
     } catch (error) {
-      console.error("Subscription error:", error);
+      console.error("Subscription error:", error instanceof Error ? error.message : String(error));
       alert("Failed to initiate subscription. Please try again.");
       setLoading(null);
     }
@@ -2304,7 +2314,7 @@ function HistoryPage({ lang, setLang, theme, setTheme }: {
       alert("30 Test Transactions generated successfully! Refreshing...");
       window.location.reload();
     } catch (error) {
-      console.error("Failed to generate test data:", error);
+      console.error("Failed to generate test data:", error instanceof Error ? error.message : String(error));
       alert("Failed to generate test data.");
     } finally {
       setIsGenerating(false);
@@ -3996,7 +4006,8 @@ export default function App() {
     });
 
     const handleGlobalError = (event: ErrorEvent) => {
-      if (event.message?.includes('Firebase')) {
+      const message = event.message || "";
+      if (message.includes('Firebase')) {
         setGlobalError({
           title: "Something went wrong",
           message: "Unable to load data from server."

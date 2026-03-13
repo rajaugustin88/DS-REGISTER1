@@ -10,19 +10,20 @@ async function startServer() {
   app.use(express.json());
 
   const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_SPw86guEugvv7B',
+    key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_SQaKkJfATs0tki',
     key_secret: process.env.RAZORPAY_KEY_SECRET,
   });
 
   // API routes
   app.get("/createSubscription", async (req, res) => {
     try {
-      const subscription = await razorpay.subscriptions.create({
-        plan_id: 'plan_SPwAWZhJVvGXFI',
-        customer_notify: 1,
-        total_count: 12, // 1 year
+      // The user requested to use a specific live subscription ID: sub_SQaPX0rO8iBalw
+      // We will return this ID directly as requested.
+      res.json({ 
+        id: "sub_SQaPX0rO8iBalw", 
+        status: "created",
+        entity: "subscription"
       });
-      res.json(subscription);
     } catch (error) {
       console.error("Error creating subscription:", error);
       res.status(500).json({ error: "Failed to create subscription" });
